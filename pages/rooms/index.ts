@@ -1,47 +1,107 @@
-// pages/api/rooms/index.ts
-import type { NextApiRequest, NextApiResponse } from 'next';
-import clientPromise from '../../lib/mongodb';
+import { useEffect, useState } from 'react'
+import { useRouter } from 'next/router'
+import { useSession } from 'next-auth/react'
+import io, { Socket } from 'socket.io-client'
+import MessageList from '../../components/MessageList'
+import ChatInput from '../../components/ChatInput'
 
-interface Room {
-  _id: string;
-  name: string;
-  createdAt: Date;
-}
+let socket: Socket
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const client = await clientPromise;
-  const db = client.db('anonymous-chat');
-  const roomsCollection = db.collection<Room>('rooms');
+const ChatRoom = () => {
+  const router = useRouter()
+  const { id: roomId } = router.query
+  const { data: session, status } = useSession()
+  const [messages, setMessages] = useState([])
+  const [typingUsers, setTypingUsers] = useState([])
 
-  if (req.method === 'GET') {
-    try {
-      const rooms = await roomsCollection.find({}).sort({ createdAt: -1 }).toArray();
-      res.status(200).json({ success: true, rooms });
-    } catch (error) {
-      console.error('Error fetching rooms:', error);
-      res.status(500).json({ success: false, error: 'Failed to fetch rooms' });
+  useEffect(() => {
+    if (status === 'unauthenticated') {
+      router.push('/login')
     }
-  } else if (req.method === 'POST') {
-    const { name } = req.body;
+  }, [status, router])
 
-    if (!name || typeof name !== 'string') {
-      res.status(400).json({ success: false, error: 'Invalid room name' });
-      return;
+  useEffect(() => {
+    if (status === 'authenticated' && roomId) {
+      socketInitializer()
     }
 
-    try {
-      const newRoom = await roomsCollection.insertOne({
-        name,
-        createdAt: new Date(),
-      });
-
-      res.status(201).json({ success: true, room: { _id: newRoom.insertedId, name, createdAt: new Date() } });
-    } catch (error) {
-      console.error('Error creating room:', error);
-      res.status(500).json({ success: false, error: 'Failed to create room' });
+    return () => {
+      if (socket) {
+        socket.emit('leaveRoom', roomId)
+        socket.disconnect()
+      }
     }
-  } else {
-    res.setHeader('Allow', ['GET', 'POST']);
-    res.status(405).end(`Method ${req.method} Not Allowed`);
+  }, [status, roomId])
+
+  const socketInitializer = async () => {
+    await fetch('/api/socket')
+    socket = io('', {
+      path: '/api/socket',
+    })
+
+    socket.on('connect', () => {
+      console.log('Connected to socket')
+      socket.emit('joinRoom', roomId)
+    })
+
+    socket.on('receiveMessage', (message) => {
+      setMessages((prevMessages) => [...prevMessages, message])
+    })
+
+    socket.on('userJoined', ({ userId }) => {
+      // Handle user joined notification
+      console.log(`User ${userId} joined the room`)
+    })
+
+    socket.on('userLeft', ({ userId }) => {
+      // Handle user left notification
+      console.log(`User ${userId} left the room`)
+    })
+
+    socket.on('userTyping', ({ userId, isTyping }) => {
+      setTypingUsers((prevUsers) => 
+        isTyping
+          ? [...prevUsers, userId]
+          : prevUsers.filter((id) => id !== userId)
+      )
+    })
   }
+
+  const sendMessage = (message: string) => {
+    if (socket) {
+      const timestamp = new Date().toISOString()
+      socket.emit('sendMessage', { roomId, message, timestamp })
+    }
+  }
+
+  const handleTyping = (isTyping: boolean) => {
+    if (socket) {
+      socket.emit('typing', { roomId, isTyping })
+    }
+  }
+
+  if (status === 'loading') {
+    return <div>Loading...</div>
+  }
+
+  if (!session) {
+    return null
+  }
+
+  return (
+    <div className="flex flex-col h-screen">
+      <h1 className="text-2xl font-bold p-4">Chat Room: {roomId}</h1>
+      <MessageList messages={messages} currentUserId={session.user.id} />
+      {typingUsers.length > 0 && (
+        <div className="text-sm text-gray-500 p-2">
+          {typingUsers.length === 1
+            ? 'Someone is typing...'
+            : `${typingUsers.length} people are typing...`}
+        </div>
+      )}
+      <ChatInput onSendMessage={sendMessage} onTyping={handleTyping} />
+    </div>
+  )
 }
+
+export default ChatRoom
