@@ -1,18 +1,19 @@
 // types/next-auth.d.ts
 
-import NextAuth from 'next-auth';
-import { Server as IOServer, Socket } from 'socket.io';
-import { Server as HTTPServer } from 'http';
+import NextAuth, { DefaultSession, DefaultUser } from "next-auth";
 
-declare module 'next-auth' {
-  interface Session {
-    accessToken?: string;
+declare module "next-auth" {
+  interface User extends DefaultUser {
+    id: string;
+  }
+
+  interface Session extends DefaultSession {
     user: {
-      id: string | null;
+      id: string;
       name?: string | null;
       email?: string | null;
       image?: string | null;
     };
+    accessToken?: string;
   }
 }
-

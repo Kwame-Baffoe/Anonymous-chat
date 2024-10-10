@@ -1,8 +1,11 @@
+// pages/api/rooms.ts
+
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from './auth/[...nextauth]';
 import clientPromise from '../../lib/mongodb';
 import { ObjectId } from 'mongodb';
+import sanitizeHtml from 'xss';
 
 interface Room {
   _id?: ObjectId;
@@ -63,26 +66,31 @@ async function handleGetRooms(
   const limitNumber = parseInt(limit as string, 10);
   const skip = (pageNumber - 1) * limitNumber;
 
-  const rooms = await roomsCollection
-    .find()
-    .sort({ [sort as string]: -1 })
-    .skip(skip)
-    .limit(limitNumber)
-    .toArray();
+  try {
+    const rooms = await roomsCollection
+      .find()
+      .sort({ [sort as string]: -1 })
+      .skip(skip)
+      .limit(limitNumber)
+      .toArray();
 
-  const totalRooms = await roomsCollection.countDocuments();
-  const totalPages = Math.ceil(totalRooms / limitNumber);
+    const totalRooms = await roomsCollection.countDocuments();
+    const totalPages = Math.ceil(totalRooms / limitNumber);
 
-  return res.status(200).json({
-    success: true,
-    data: rooms,
-    pagination: {
-      currentPage: pageNumber,
-      totalPages,
-      totalRooms,
-      hasMore: pageNumber < totalPages,
-    },
-  });
+    return res.status(200).json({
+      success: true,
+      data: rooms,
+      pagination: {
+        currentPage: pageNumber,
+        totalPages,
+        totalRooms,
+        hasMore: pageNumber < totalPages,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching rooms:', error);
+    res.status(500).json({ success: false, error: 'Error fetching rooms' });
+  }
 }
 
 async function handleCreateRoom(
@@ -102,8 +110,10 @@ async function handleCreateRoom(
     });
   }
 
+  const sanitizedRoomName = sanitizeHtml(name.trim());
+
   // Check if room with the same name already exists
-  const existingRoom = await roomsCollection.findOne({ name: name.trim() });
+  const existingRoom = await roomsCollection.findOne({ name: sanitizedRoomName });
   if (existingRoom) {
     console.log('Room creation failed - Room with this name already exists');
     return res
@@ -111,9 +121,9 @@ async function handleCreateRoom(
       .json({ success: false, error: 'A room with this name already exists' });
   }
 
-  console.log('Creating new room:', name);
+  console.log('Creating new room:', sanitizedRoomName);
   const newRoom: Room = {
-    name: name.trim(),
+    name: sanitizedRoomName,
     createdBy: new ObjectId(userId),
     createdAt: new Date(),
     lastMessage: '',
@@ -137,20 +147,28 @@ async function handleUpdateRoom(
 ) {
   const { roomId, name } = req.body;
   if (!roomId || !ObjectId.isValid(roomId)) {
+    console.log('Invalid roomId format');
     return res.status(400).json({ success: false, error: 'Invalid room ID' });
   }
   if (!name || typeof name !== 'string' || name.trim().length === 0) {
+    console.log(
+      'Invalid room update request - Room name is required and must be a non-empty string'
+    );
     return res.status(400).json({
       success: false,
       error: 'Room name is required and must be a non-empty string',
     });
   }
 
+  const sanitizedRoomName = sanitizeHtml(name.trim());
+
   const room = await roomsCollection.findOne({ _id: new ObjectId(roomId) });
   if (!room) {
+    console.log('Room not found for update:', roomId);
     return res.status(404).json({ success: false, error: 'Room not found' });
   }
   if (room.createdBy.toString() !== userId) {
+    console.log('User does not have permission to update room:', roomId);
     return res.status(403).json({
       success: false,
       error: 'You do not have permission to update this room',
@@ -159,7 +177,7 @@ async function handleUpdateRoom(
 
   const updatedRoom = await roomsCollection.findOneAndUpdate(
     { _id: new ObjectId(roomId) },
-    { $set: { name: name.trim() } },
+    { $set: { name: sanitizedRoomName } },
     { returnDocument: 'after' }
   );
 

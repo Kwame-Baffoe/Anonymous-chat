@@ -2,6 +2,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { getSession } from 'next-auth/react';
 import { connectToDatabase } from '../../lib/mongodb';
 import { ObjectId, Db } from 'mongodb';
+import sanitizeHtml from 'sanitize-html';
 
 interface Message {
   _id?: ObjectId;
@@ -9,7 +10,6 @@ interface Message {
   userId: ObjectId;
   username: string;
   content?: string;
-  audioData?: string;
   audioUrl?: string;
   reactions: { [key: string]: string[] };
   createdAt: Date;
@@ -38,7 +38,7 @@ export default async function handler(
 
   if (req.method !== 'GET' && req.method !== 'POST') {
     res.setHeader('Allow', ['GET', 'POST']);
-    res.status(405).end(`Method ${req.method} Not Allowed`);
+    return res.status(405).end(`Method ${req.method} Not Allowed`);
   }
   console.log('Session:', session);
 
@@ -52,11 +52,11 @@ export default async function handler(
         return createMessage(req, res, db, session);
       default:
         res.setHeader('Allow', ['GET', 'POST']);
-        res.status(405).end(`Method ${req.method} Not Allowed`);
+        return res.status(405).end(`Method ${req.method} Not Allowed`);
     }
   } catch (error) {
     console.error('Database connection error:', error);
-    res.status(500).json({ success: false, error: 'Internal server error' });
+    return res.status(500).json({ success: false, error: 'Internal server error' });
   }
 }
 
@@ -67,6 +67,11 @@ async function getMessages(req: NextApiRequest, res: NextApiResponse, db: Db) {
   if (!roomId) {
     console.log('Missing roomId in request');
     return res.status(400).json({ success: false, error: 'Room ID is required' });
+  }
+
+  if (typeof roomId !== 'string' || !ObjectId.isValid(roomId)) {
+    console.log('Invalid roomId format');
+    return res.status(400).json({ success: false, error: 'Invalid Room ID format' });
   }
 
   const pageNumber = parseInt(page as string, 10);
@@ -87,7 +92,7 @@ async function getMessages(req: NextApiRequest, res: NextApiResponse, db: Db) {
       .countDocuments({ roomId: new ObjectId(roomId as string) });
 
     console.log(`Fetched ${messages.length} messages for room ${roomId}`);
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data: messages,
       pagination: {
@@ -99,27 +104,25 @@ async function getMessages(req: NextApiRequest, res: NextApiResponse, db: Db) {
     });
   } catch (error) {
     console.error('Error fetching messages:', error);
-    res.status(500).json({ success: false, error: 'Error fetching messages' });
+    return res.status(500).json({ success: false, error: 'Error fetching messages' });
   }
 }
 
-async function createMessage(
-  req: NextApiRequest,
-  res: NextApiResponse,
-  db: Db,
-  session: any
-) {
+async function createMessage(req: NextApiRequest, res: NextApiResponse, db: Db, session: any) {
   console.log('Creating new message');
-  const { roomId, content, audioData } = req.body;
+  const { roomId, content, audioUrl } = req.body;
 
-  if (!roomId || (!content && !audioData)) {
-    console.log('Missing roomId or content/audioData in request');
-    return res
-      .status(400)
-      .json({ success: false, error: 'Room ID and content are required' });
+  if (!roomId || (!content && !audioUrl)) {
+    console.log('Missing roomId or content/audioUrl in request');
+    return res.status(400).json({ success: false, error: 'Room ID and either content or audioUrl are required' });
   }
 
-  let message: Message = {
+  if (typeof roomId !== 'string' || !ObjectId.isValid(roomId)) {
+    console.log('Invalid roomId format');
+    return res.status(400).json({ success: false, error: 'Invalid Room ID format' });
+  }
+
+  const message: Message = {
     roomId: new ObjectId(roomId),
     userId: new ObjectId(session.user.id),
     username: session.user.name,
@@ -128,10 +131,15 @@ async function createMessage(
   };
 
   if (content) {
-    message.content = content;
-  } else if (audioData) {
-    // Save audio data to storage and get URL
-    const audioUrl = await saveAudioData(audioData);
+    message.content = sanitizeHtml(content, {
+      allowedTags: ['b', 'i', 'em', 'strong', 'a'],
+      allowedAttributes: {
+        'a': ['href']
+      }
+    });
+  }
+
+  if (audioUrl) {
     message.audioUrl = audioUrl;
   }
 
@@ -141,19 +149,13 @@ async function createMessage(
 
     await db.collection('rooms').updateOne(
       { _id: new ObjectId(roomId) },
-      { $set: { lastMessage: content || 'Voice Message', lastMessageAt: new Date() } }
+      { $set: { lastMessage: content || 'Audio message', lastMessageAt: new Date() } }
     );
 
     console.log(`Created new message in room ${roomId}`);
-    res.status(201).json({ success: true, data: message });
+    return res.status(201).json({ success: true, data: message });
   } catch (error) {
     console.error('Error creating message:', error);
-    res.status(500).json({ success: false, error: 'Error creating message' });
+    return res.status(500).json({ success: false, error: 'Error creating message' });
   }
-}
-
-async function saveAudioData(audioData: string): Promise<string> {
-  // Implement the logic to save audio data to storage and return the URL
-  // For simplicity, we're returning a placeholder URL here
-  return 'https://your-storage-service.com/audio/' + Date.now();
 }
