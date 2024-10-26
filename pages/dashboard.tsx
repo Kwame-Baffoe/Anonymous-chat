@@ -1,7 +1,8 @@
+// pages/dashboard.tsx
+
 import React, { useEffect, useCallback, useRef, useReducer } from 'react';
 import { useSession, signOut } from 'next-auth/react';
 import { useRouter } from 'next/router';
-import io, { Socket } from 'socket.io-client';
 import {
   MessageSquare,
   Send,
@@ -29,12 +30,18 @@ import { Logger } from '../utils/Logger';
 import { UserProfileModal } from '../components/UserProfileModal';
 import { VoiceVideoCallModal } from '../components/VoiceVideoCallModal';
 import { MessageThreadModal } from '../components/MessageThreadModal';
-import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from 'react-query';
+import {
+  useInfiniteQuery,
+  useQuery,
+  useMutation,
+  useQueryClient,
+} from 'react-query';
 import axios from 'axios';
 import Peer from 'simple-peer';
 import { CryptoService } from '../services/CryptoService';
 import { PushNotificationService } from '../services/PushNotificationService';
-import Spinner from '../components/Spinner'; // Importing the Spinner component
+import Spinner from '../components/Spinner';
+import { useSocket } from '../contexts/SocketContext'; // Import useSocket from SocketContext
 
 // Interfaces
 interface Room {
@@ -114,7 +121,9 @@ const useMessages = (roomId: string) => {
   return useInfiniteQuery<ApiResponse<Message>, Error>(
     ['messages', roomId],
     async ({ pageParam = 1 }) => {
-      const { data } = await api.get(`/messages?roomId=${roomId}&page=${pageParam}&limit=20`);
+      const { data } = await api.get(
+        `/messages?roomId=${roomId}&page=${pageParam}&limit=20`
+      );
       return data;
     },
     {
@@ -251,10 +260,10 @@ const DashboardPage: React.FC = () => {
   const { data: session, status } = useSession();
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { socket } = useSocket(); // Use socket from context
 
   const [state, dispatch] = useReducer(reducer, initialState);
 
-  const socketRef = useRef<Socket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const lastMessageRef = useRef<HTMLDivElement>(null);
   const peerRef = useRef<Peer.Instance | null>(null);
@@ -264,68 +273,27 @@ const DashboardPage: React.FC = () => {
     data: roomsData,
     fetchNextPage: fetchNextRooms,
     hasNextPage: hasMoreRooms,
-    isLoading: isLoadingRooms, // Added loading state
+    isLoading: isLoadingRooms,
   } = useRooms();
+
   const {
     data: messagesData,
     fetchNextPage: fetchNextMessages,
     hasNextPage: hasMoreMessages,
-    isLoading: isLoadingMessages, // Added loading state
+    isLoading: isLoadingMessages,
   } = useMessages(state.selectedRoom?._id ?? '');
+
   const {
     data: onlineUsers,
-    isLoading: isLoadingOnlineUsers, // Added loading state
+    isLoading: isLoadingOnlineUsers,
   } = useOnlineUsers();
 
-  const sendMessageMutation = useMutation<Message, Error, Partial<Message>>(
-    (newMessage) => api.post('/messages', newMessage),
-    {
-      onSuccess: (data) => {
-        queryClient.setQueryData<ApiResponse<Message>>(
-          ['messages', state.selectedRoom?._id],
-          (oldData) => {
-            if (!oldData) return { results: [data], nextPage: null };
-            return {
-              ...oldData,
-              results: [data, ...oldData.results],
-            };
-          }
-        );
-      },
-    }
-  );
-
-  // WebSocket Logic
+  // Redirect unauthenticated users to login page
   useEffect(() => {
     if (status === 'unauthenticated') {
       router.push('/login');
-    } else if (status === 'authenticated' && session) {
-      const socket = io('/api/socket', {
-        auth: { token: session.accessToken },
-      });
-      socketRef.current = socket;
-
-      socket.on('connect', () => {
-        Logger.log('Socket connected');
-        dispatch({ type: 'SET_SOCKET_CONNECTED', payload: true });
-      });
-
-      socket.on('connect_error', (error: Error) => {
-        Logger.error('Socket connection error:', error);
-        dispatch({ type: 'SET_SOCKET_CONNECTED', payload: false });
-      });
-
-      PushNotificationService.init().then((registration) => {
-        if (registration) {
-          PushNotificationService.subscribeToPushNotifications(registration);
-        }
-      });
-
-      return () => {
-        socket.disconnect();
-      };
     }
-  }, [status, session, router]);
+  }, [status, router]);
 
   // Socket event handlers
   const handleNewMessage = useCallback(
@@ -363,19 +331,22 @@ const DashboardPage: React.FC = () => {
   );
 
   const handleMessageDeleted = useCallback(
-    (deletedMessageId: string, roomId: string) => {
+    (deletedMessageId: string) => {
+      if (!state.selectedRoom) return;
       queryClient.setQueryData<ApiResponse<Message>>(
-        ['messages', roomId],
+        ['messages', state.selectedRoom._id],
         (oldData) => {
           if (!oldData) return { results: [], nextPage: null };
           return {
             ...oldData,
-            results: oldData.results.filter((msg) => msg._id !== deletedMessageId),
+            results: oldData.results.filter(
+              (msg) => msg._id !== deletedMessageId
+            ),
           };
         }
       );
     },
-    [queryClient]
+    [queryClient, state.selectedRoom]
   );
 
   const handleUserTyping = useCallback(
@@ -424,8 +395,9 @@ const DashboardPage: React.FC = () => {
       emoji: string;
       userId: string;
     }) => {
+      if (!state.selectedRoom) return;
       queryClient.setQueryData<ApiResponse<Message>>(
-        ['messages', state.selectedRoom?._id],
+        ['messages', state.selectedRoom._id],
         (oldData) => {
           if (!oldData) return { results: [], nextPage: null };
           return {
@@ -465,33 +437,41 @@ const DashboardPage: React.FC = () => {
     // Handle incoming call logic here
   }, []);
 
+  // Setup socket event listeners
   useEffect(() => {
-    if (socketRef.current) {
-      socketRef.current.on('newMessage', handleNewMessage);
-      socketRef.current.on('messageUpdated', handleMessageUpdated);
-      socketRef.current.on('messageDeleted', handleMessageDeleted);
-      socketRef.current.on('userTyping', handleUserTyping);
-      socketRef.current.on('userStoppedTyping', handleUserStoppedTyping);
-      socketRef.current.on('userPresenceChanged', handleUserPresenceChanged);
-      socketRef.current.on('messageReaction', handleMessageReaction);
-      socketRef.current.on('incomingCall', handleIncomingCall);
-      socketRef.current.on('newRoom', handleNewRoom);
-    }
+    if (socket && session && state.selectedRoom) {
+      // Join the selected room
+      socket.emit('joinRoom', state.selectedRoom._id);
 
-    return () => {
-      if (socketRef.current) {
-        socketRef.current.off('newMessage', handleNewMessage);
-        socketRef.current.off('messageUpdated', handleMessageUpdated);
-        socketRef.current.off('messageDeleted', handleMessageDeleted);
-        socketRef.current.off('userTyping', handleUserTyping);
-        socketRef.current.off('userStoppedTyping', handleUserStoppedTyping);
-        socketRef.current.off('userPresenceChanged', handleUserPresenceChanged);
-        socketRef.current.off('messageReaction', handleMessageReaction);
-        socketRef.current.off('incomingCall', handleIncomingCall);
-        socketRef.current.off('newRoom', handleNewRoom);
-      }
-    };
+      // Register event listeners
+      socket.on('newMessage', handleNewMessage);
+      socket.on('messageEdited', handleMessageUpdated);
+      socket.on('messageDeleted', handleMessageDeleted);
+      socket.on('userTyping', handleUserTyping);
+      socket.on('userStoppedTyping', handleUserStoppedTyping);
+      socket.on('userPresenceChanged', handleUserPresenceChanged);
+      socket.on('messageReaction', handleMessageReaction);
+      socket.on('incomingCall', handleIncomingCall);
+      socket.on('newRoom', handleNewRoom);
+
+      // Cleanup event listeners on unmount or when dependencies change
+      return () => {
+        socket.emit('leaveRoom', state.selectedRoom?._id);
+        socket.off('newMessage', handleNewMessage);
+        socket.off('messageEdited', handleMessageUpdated);
+        socket.off('messageDeleted', handleMessageDeleted);
+        socket.off('userTyping', handleUserTyping);
+        socket.off('userStoppedTyping', handleUserStoppedTyping);
+        socket.off('userPresenceChanged', handleUserPresenceChanged);
+        socket.off('messageReaction', handleMessageReaction);
+        socket.off('incomingCall', handleIncomingCall);
+        socket.off('newRoom', handleNewRoom);
+      };
+    }
   }, [
+    socket,
+    session,
+    state.selectedRoom,
     handleNewMessage,
     handleMessageUpdated,
     handleMessageDeleted,
@@ -506,7 +486,9 @@ const DashboardPage: React.FC = () => {
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (
-      (!state.message.trim() && !state.audioBlob && state.attachments.length === 0) ||
+      (!state.message.trim() &&
+        !state.audioBlob &&
+        state.attachments.length === 0) ||
       !state.selectedRoom ||
       !session
     )
@@ -522,6 +504,7 @@ const DashboardPage: React.FC = () => {
       reactions: {},
     };
 
+    // Optimistically update UI
     queryClient.setQueryData<ApiResponse<Message>>(
       ['messages', state.selectedRoom._id],
       (oldData) => {
@@ -560,34 +543,20 @@ const DashboardPage: React.FC = () => {
         session.user.privateKey
       );
 
-      const newMessage: Partial<Message> = {
+      // Send message via socket
+      socket?.emit('sendMessage', {
         roomId: state.selectedRoom._id,
         content: encryptedContent,
-        attachments: uploadedAttachments as Attachment[],
-      };
+        attachments: uploadedAttachments,
+      });
 
-      const { data: savedMessage } = await api.post<Message>('/messages', newMessage);
-
-      queryClient.setQueryData<ApiResponse<Message>>(
-        ['messages', state.selectedRoom._id],
-        (oldData) => {
-          if (!oldData) return { results: [savedMessage], nextPage: null };
-          return {
-            ...oldData,
-            results: oldData.results.map((msg) =>
-              msg._id === optimisticMessage._id ? savedMessage : msg
-            ),
-          };
-        }
-      );
-
-      socketRef.current?.emit('newMessage', savedMessage);
-
+      // Clear input fields
       dispatch({ type: 'SET_MESSAGE', payload: '' });
       dispatch({ type: 'SET_AUDIO_BLOB', payload: null });
       dispatch({ type: 'SET_ATTACHMENTS', payload: [] });
     } catch (error) {
       Logger.error('Error sending message:', error);
+      // Remove optimistic message
       queryClient.setQueryData<ApiResponse<Message>>(
         ['messages', state.selectedRoom._id],
         (oldData) => {
@@ -604,22 +573,23 @@ const DashboardPage: React.FC = () => {
     }
   };
 
+  // Debounced typing handler
   const handleTyping = useCallback(
     debounce(() => {
-      if (socketRef.current && state.selectedRoom) {
-        socketRef.current.emit('typing', { roomId: state.selectedRoom._id });
+      if (state.selectedRoom && socket) {
+        socket.emit('userTyping', { roomId: state.selectedRoom._id });
       }
     }, 300),
-    [state.selectedRoom]
+    [state.selectedRoom, socket]
   );
 
   const handleStopTyping = useCallback(
     debounce(() => {
-      if (socketRef.current && state.selectedRoom) {
-        socketRef.current.emit('stopTyping', { roomId: state.selectedRoom._id });
+      if (state.selectedRoom && socket) {
+        socket.emit('userStoppedTyping', { roomId: state.selectedRoom._id });
       }
     }, 1000),
-    [state.selectedRoom]
+    [state.selectedRoom, socket]
   );
 
   const startRecording = useCallback(async () => {
@@ -673,7 +643,10 @@ const DashboardPage: React.FC = () => {
     const formData = new FormData();
     formData.append('file', file);
     try {
-      const { data } = await api.post<{ url: string }>('/upload-attachment', formData);
+      const { data } = await api.post<{ url: string }>(
+        '/upload-attachment',
+        formData
+      );
       return data.url;
     } catch (error) {
       Logger.error('Error uploading attachment:', error);
@@ -695,11 +668,13 @@ const DashboardPage: React.FC = () => {
 
       if (result.isConfirmed) {
         await signOut({ redirect: false });
-        Swal.fire('Logged Out!', 'You have been successfully logged out.', 'success').then(
-          () => {
-            router.push('/login');
-          }
-        );
+        Swal.fire(
+          'Logged Out!',
+          'You have been successfully logged out.',
+          'success'
+        ).then(() => {
+          router.push('/login');
+        });
       }
     } catch (error) {
       Logger.error('Error signing out:', error);
@@ -712,7 +687,7 @@ const DashboardPage: React.FC = () => {
   }, []);
 
   const handleVoiceCallClick = useCallback(() => {
-    initiateCall('voice');
+    initiateCall('audio');
   }, []);
 
   const handleVideoCallClick = useCallback(() => {
@@ -720,7 +695,7 @@ const DashboardPage: React.FC = () => {
   }, []);
 
   const initiateCall = useCallback(
-    (type: 'voice' | 'video') => {
+    (type: 'audio' | 'video') => {
       if (!state.selectedRoom) return;
 
       navigator.mediaDevices
@@ -733,11 +708,11 @@ const DashboardPage: React.FC = () => {
           });
 
           peerRef.current.on('signal', (data) => {
-            socketRef.current?.emit('callUser', {
-              userToCall: state.selectedRoom?._id,
+            // Send signal data via socket
+            socket?.emit('initiateCall', {
+              roomId: state.selectedRoom?._id,
+              type,
               signalData: data,
-              from: session?.user.id,
-              type: type,
             });
           });
 
@@ -747,7 +722,8 @@ const DashboardPage: React.FC = () => {
             }
           });
 
-          socketRef.current?.on('callAccepted', (signal: any) => {
+          // Handle call accepted and signal received
+          socket?.on('callAccepted', (signal: any) => {
             peerRef.current?.signal(signal);
           });
 
@@ -758,52 +734,59 @@ const DashboardPage: React.FC = () => {
           Swal.fire('Error', 'Failed to access camera/microphone', 'error');
         });
     },
-    [state.selectedRoom, session]
+    [state.selectedRoom, socket]
   );
 
-  const acceptCall = useCallback((data: { from: string; type: 'voice' | 'video'; signal: any }) => {
-    navigator.mediaDevices
-      .getUserMedia({ audio: true, video: data.type === 'video' })
-      .then((stream) => {
-        peerRef.current = new Peer({
-          initiator: false,
-          trickle: false,
-          stream: stream,
+  const acceptCall = useCallback(
+    (data: { from: string; type: 'audio' | 'video'; signal: any }) => {
+      navigator.mediaDevices
+        .getUserMedia({ audio: true, video: data.type === 'video' })
+        .then((stream) => {
+          peerRef.current = new Peer({
+            initiator: false,
+            trickle: false,
+            stream: stream,
+          });
+
+          peerRef.current.on('signal', (signal) => {
+            // Send signal back to caller via socket
+            socket?.emit('acceptCall', { to: data.from, signalData: signal });
+          });
+
+          peerRef.current.on('stream', (remoteStream: MediaStream) => {
+            if (remoteVideoRef.current) {
+              remoteVideoRef.current.srcObject = remoteStream;
+            }
+          });
+
+          peerRef.current.signal(data.signal);
+
+          dispatch({ type: 'SET_SHOW_VOICE_VIDEO_CALL', payload: true });
+        })
+        .catch((err) => {
+          Logger.error('Failed to get local stream', err);
+          Swal.fire('Error', 'Failed to access camera/microphone', 'error');
         });
+    },
+    [socket]
+  );
 
-        peerRef.current.on('signal', (signal) => {
-          socketRef.current?.emit('acceptCall', { signal, to: data.from });
-        });
-
-        peerRef.current.on('stream', (remoteStream: MediaStream) => {
-          if (remoteVideoRef.current) {
-            remoteVideoRef.current.srcObject = remoteStream;
-          }
-        });
-
-        peerRef.current.signal(data.signal);
-
-        dispatch({ type: 'SET_SHOW_VOICE_VIDEO_CALL', payload: true });
-      })
-      .catch((err) => {
-        Logger.error('Failed to get local stream', err);
-        Swal.fire('Error', 'Failed to access camera/microphone', 'error');
-      });
-  }, []);
-
-  const declineCall = useCallback((data: { from: string }) => {
-    socketRef.current?.emit('declineCall', { to: data.from });
-  }, []);
+  const declineCall = useCallback((callId: string) => {
+    socket?.emit('declineCall', { callId });
+  }, [socket]);
 
   const endCall = useCallback(() => {
     peerRef.current?.destroy();
     dispatch({ type: 'SET_SHOW_VOICE_VIDEO_CALL', payload: false });
   }, []);
 
-  const handleUserPresenceChange = useCallback((presence: User['presence']) => {
-    dispatch({ type: 'SET_USER_PRESENCE', payload: presence });
-    socketRef.current?.emit('updatePresence', { presence });
-  }, []);
+  const handleUserPresenceChange = useCallback(
+    (presence: User['presence']) => {
+      dispatch({ type: 'SET_USER_PRESENCE', payload: presence });
+      socket?.emit('updatePresence', { presence });
+    },
+    [socket]
+  );
 
   const handleMessageThread = useCallback((parentMessageId: string) => {
     dispatch({ type: 'SET_SELECTED_THREAD_PARENT_ID', payload: parentMessageId });
@@ -813,71 +796,30 @@ const DashboardPage: React.FC = () => {
   const handleSearchMessages = useCallback(
     debounce((query: string) => {
       dispatch({ type: 'SET_MESSAGE_SEARCH_QUERY', payload: query });
-      if (state.selectedRoom && session) {
-        queryClient.setQueryData<ApiResponse<Message>>(
-          ['messages', state.selectedRoom._id],
-          (oldData) => {
-            if (!oldData) return { results: [], nextPage: null };
-            const myPrivateKey = session.user.privateKey;
-            const filteredResults = oldData.results.filter((msg) => {
-              try {
-                const decryptedContent = CryptoService.decrypt(
-                  msg.content,
-                  state.selectedRoom?.publicKey || '',
-                  myPrivateKey
-                );
-                return decryptedContent.toLowerCase().includes(query.toLowerCase());
-              } catch (error) {
-                Logger.error('Decryption error during search:', error);
-                return false;
-              }
-            });
-            return {
-              ...oldData,
-              results: filteredResults,
-            };
-          }
-        );
-      }
+      // Implement message search logic here if needed
     }, 300),
-    [state.selectedRoom, queryClient, session]
+    []
   );
 
-  const addReplyToThread = useCallback((parentId: string, content: string) => {
-    if (!session || !state.selectedRoom) return;
+  const addReplyToThread = useCallback(
+    (parentId: string, content: string) => {
+      if (!session || !state.selectedRoom) return;
 
-    const encryptedContent = CryptoService.encrypt(
-      content,
-      state.selectedRoom.publicKey,
-      session.user.privateKey
-    );
+      const encryptedContent = CryptoService.encrypt(
+        content,
+        state.selectedRoom.publicKey,
+        session.user.privateKey
+      );
 
-    const newReply: Message = {
-      _id: uuidv4(),
-      parentId,
-      content: encryptedContent,
-      userId: session.user.id,
-      username: session.user.name || '',
-      createdAt: new Date().toISOString(),
-      roomId: state.selectedRoom._id,
-      reactions: {},
-    };
-
-    queryClient.setQueryData<ApiResponse<Message>>(
-      ['messages', state.selectedRoom._id],
-      (oldData) => {
-        if (!oldData) return { results: [newReply], nextPage: null };
-        const updatedResults = oldData.results.map((msg) =>
-          msg._id === parentId
-            ? { ...msg, thread: [...(msg.thread || []), newReply] }
-            : msg
-        );
-        return { ...oldData, results: updatedResults };
-      }
-    );
-
-    socketRef.current?.emit('newReply', newReply);
-  }, [queryClient, state.selectedRoom, session]);
+      // Send thread message via socket
+      socket?.emit('addMessageToThread', {
+        parentId,
+        content: encryptedContent,
+        roomId: state.selectedRoom._id,
+      });
+    },
+    [session, state.selectedRoom, socket]
+  );
 
   const handleEditClick = useCallback((messageId: string, content: string) => {
     dispatch({ type: 'SET_EDITING_MESSAGE_ID', payload: messageId });
@@ -893,19 +835,13 @@ const DashboardPage: React.FC = () => {
         state.selectedRoom.publicKey,
         session.user.privateKey
       );
-      await api.put(`/messages/${state.editingMessageId}`, { content: encryptedContent });
-      queryClient.setQueryData<ApiResponse<Message>>(
-        ['messages', state.selectedRoom._id],
-        (oldData) => {
-          if (!oldData) return { results: [], nextPage: null };
-          const updatedResults = oldData.results.map((msg) =>
-            msg._id === state.editingMessageId
-              ? { ...msg, content: encryptedContent, isEdited: true }
-              : msg
-          );
-          return { ...oldData, results: updatedResults };
-        }
-      );
+
+      // Send edit message via socket
+      socket?.emit('editMessage', {
+        messageId: state.editingMessageId,
+        content: encryptedContent,
+      });
+
       dispatch({ type: 'SET_SHOW_EDIT_MESSAGE', payload: false });
       dispatch({ type: 'SET_EDITING_MESSAGE_ID', payload: null });
       dispatch({ type: 'SET_EDITED_MESSAGE_CONTENT', payload: '' });
@@ -918,7 +854,7 @@ const DashboardPage: React.FC = () => {
     state.selectedRoom,
     session,
     state.editedMessageContent,
-    queryClient,
+    socket,
   ]);
 
   const handleDeleteClick = useCallback((messageId: string) => {
@@ -927,38 +863,32 @@ const DashboardPage: React.FC = () => {
   }, []);
 
   const confirmDelete = useCallback(async () => {
-    if (!state.messageToDelete || !state.selectedRoom) return;
+    if (!state.messageToDelete || !state.selectedRoom || !socket) return;
     try {
-      await handleDeleteMessage(state.messageToDelete);
+      // Send delete message via socket
+      socket.emit('deleteMessage', {
+        messageId: state.messageToDelete,
+        roomId: state.selectedRoom._id,
+      });
       dispatch({ type: 'SET_SHOW_DELETE_CONFIRMATION', payload: false });
       dispatch({ type: 'SET_MESSAGE_TO_DELETE', payload: null });
     } catch (error) {
       Logger.error('Error deleting message:', error);
       Swal.fire('Error', 'Failed to delete message', 'error');
     }
-  }, [state.messageToDelete, state.selectedRoom]);
+  }, [state.messageToDelete, state.selectedRoom, socket]);
 
-  const handleDeleteMessage = useCallback(
-    async (messageId: string) => {
-      try {
-        await api.delete(`/messages/${messageId}`);
-        queryClient.setQueryData<ApiResponse<Message>>(
-          ['messages', state.selectedRoom?._id],
-          (oldData) => {
-            if (!oldData) return { results: [], nextPage: null };
-            return {
-              ...oldData,
-              results: oldData.results.filter((msg) => msg._id !== messageId),
-            };
-          }
-        );
-        Swal.fire('Success', 'Message deleted successfully', 'success');
-      } catch (error) {
-        Logger.error('Error deleting message:', error);
-        throw new Error('Failed to delete message');
-      }
+  const handleMessageReactionClick = useCallback(
+    (messageId: string, emoji: string) => {
+      if (!session || !state.selectedRoom) return;
+      socket?.emit('messageReaction', {
+        messageId,
+        emoji,
+        userId: session.user.id,
+        roomId: state.selectedRoom._id,
+      });
     },
-    [state.selectedRoom, queryClient]
+    [session, state.selectedRoom, socket]
   );
 
   const renderMessage = useCallback(
@@ -982,7 +912,9 @@ const DashboardPage: React.FC = () => {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -20 }}
-          className={`mb-4 ${msg.userId === session?.user.id ? 'text-right' : 'text-left'}`}
+          className={`mb-4 ${
+            msg.userId === session?.user.id ? 'text-right' : 'text-left'
+          }`}
           aria-label={`Message from ${msg.username}`}
         >
           <div
@@ -1020,7 +952,7 @@ const DashboardPage: React.FC = () => {
               ))}
               <button
                 onClick={() =>
-                  handleMessageReaction({ messageId: msg._id, emoji: '👍', userId: session?.user.id || '' })
+                  handleMessageReactionClick(msg._id, '👍')
                 }
                 className="text-sm"
                 aria-label="React with thumbs up"
@@ -1029,7 +961,7 @@ const DashboardPage: React.FC = () => {
               </button>
               <button
                 onClick={() =>
-                  handleMessageReaction({ messageId: msg._id, emoji: '❤️', userId: session?.user.id || '' })
+                  handleMessageReactionClick(msg._id, '❤️')
                 }
                 className="text-sm"
                 aria-label="React with heart"
@@ -1038,7 +970,7 @@ const DashboardPage: React.FC = () => {
               </button>
               <button
                 onClick={() =>
-                  handleMessageReaction({ messageId: msg._id, emoji: '😂', userId: session?.user.id || '' })
+                  handleMessageReactionClick(msg._id, '😂')
                 }
                 className="text-sm"
                 aria-label="React with laughing face"
@@ -1052,7 +984,11 @@ const DashboardPage: React.FC = () => {
                   onClick={() =>
                     handleEditClick(
                       msg._id,
-                      CryptoService.decrypt(msg.content, state.selectedRoom?.publicKey || '', myPrivateKey)
+                      CryptoService.decrypt(
+                        msg.content,
+                        state.selectedRoom?.publicKey || '',
+                        myPrivateKey
+                      )
                     )
                   }
                   className="text-xs text-blue-500 hover:underline"
@@ -1091,7 +1027,7 @@ const DashboardPage: React.FC = () => {
     },
     [
       session,
-      handleMessageReaction,
+      handleMessageReactionClick,
       handleMessageThread,
       handleEditClick,
       handleDeleteClick,
@@ -1119,8 +1055,13 @@ const DashboardPage: React.FC = () => {
   return (
     <ErrorBoundary
       FallbackComponent={({ error, resetErrorBoundary }) => (
-        <div className="flex flex-col items-center justify-center h-screen" role="alert">
-          <h1 className="text-2xl font-bold text-red-600 mb-4">Oops! Something went wrong</h1>
+        <div
+          className="flex flex-col items-center justify-center h-screen"
+          role="alert"
+        >
+          <h1 className="text-2xl font-bold text-red-600 mb-4">
+            Oops! Something went wrong
+          </h1>
           <p className="text-gray-600 mb-4">{error.message}</p>
           <button
             onClick={resetErrorBoundary}
@@ -1134,7 +1075,7 @@ const DashboardPage: React.FC = () => {
       <div className="h-screen flex flex-col bg-gray-100">
         {/* Header */}
         <header className="bg-white shadow-md px-6 py-4 flex justify-between items-center">
-          <h1 className="text-2xl font-bold text-indigo-600">Chat with League</h1>
+          <h1 className="text-2xl font-bold text-indigo-600">Chat Application</h1>
           <div className="flex items-center space-x-4">
             <button
               onClick={handleUserProfileClick}
@@ -1146,7 +1087,9 @@ const DashboardPage: React.FC = () => {
             </button>
             <select
               value={state.userPresence}
-              onChange={(e) => handleUserPresenceChange(e.target.value as User['presence'])}
+              onChange={(e) =>
+                handleUserPresenceChange(e.target.value as User['presence'])
+              }
               className="bg-gray-100 border border-gray-300 rounded-md px-2 py-1"
               aria-label="Set user presence"
             >
@@ -1165,9 +1108,9 @@ const DashboardPage: React.FC = () => {
             </button>
             <div
               className={`w-3 h-3 rounded-full ${
-                state.socketConnected ? 'bg-green-500' : 'bg-red-500'
+                socket?.connected ? 'bg-green-500' : 'bg-red-500'
               }`}
-              aria-label={state.socketConnected ? 'Connected' : 'Disconnected'}
+              aria-label={socket?.connected ? 'Connected' : 'Disconnected'}
             ></div>
           </div>
         </header>
@@ -1175,47 +1118,68 @@ const DashboardPage: React.FC = () => {
         {/* Main Content */}
         <div className="flex-1 flex overflow-hidden">
           {/* Sidebar */}
-          <aside className="w-64 bg-white border-r border-gray-200 flex flex-col" aria-label="Chat rooms">
+          <aside
+            className="w-64 bg-white border-r border-gray-200 flex flex-col"
+            aria-label="Chat rooms"
+          >
             <div className="p-4">
               <div className="relative">
                 <input
                   type="text"
                   placeholder="Search rooms..."
                   value={state.searchQuery}
-                  onChange={(e) => dispatch({ type: 'SET_SEARCH_QUERY', payload: e.target.value })}
+                  onChange={(e) =>
+                    dispatch({ type: 'SET_SEARCH_QUERY', payload: e.target.value })
+                  }
                   className="w-full px-3 py-2 pl-10 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   aria-label="Search rooms"
                 />
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} aria-hidden="true" />
+                <Search
+                  className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"
+                  size={18}
+                  aria-hidden="true"
+                />
               </div>
             </div>
             <div className="flex-1 overflow-y-auto">
               {isLoadingRooms ? (
-                <Spinner /> // Using the Spinner component
+                <Spinner />
               ) : (
                 roomsData?.pages.map((page, i) => (
                   <React.Fragment key={i}>
                     {(page.results || [])
                       .filter((room) =>
-                        room.name.toLowerCase().includes(state.searchQuery.toLowerCase())
+                        room.name
+                          .toLowerCase()
+                          .includes(state.searchQuery.toLowerCase())
                       )
                       .map((room: Room) => (
                         <div
                           key={room._id}
                           className={`p-3 hover:bg-gray-100 cursor-pointer ${
-                            state.selectedRoom?._id === room._id ? 'bg-indigo-100' : ''
+                            state.selectedRoom?._id === room._id
+                              ? 'bg-indigo-100'
+                              : ''
                           }`}
-                          onClick={() => dispatch({ type: 'SET_SELECTED_ROOM', payload: room })}
+                          onClick={() =>
+                            dispatch({ type: 'SET_SELECTED_ROOM', payload: room })
+                          }
                           role="button"
                           aria-pressed={state.selectedRoom?._id === room._id}
                           tabIndex={0}
                         >
                           <div className="flex items-center">
-                            <MessageSquare size={20} className="mr-2 text-indigo-600" aria-hidden="true" />
+                            <MessageSquare
+                              size={20}
+                              className="mr-2 text-indigo-600"
+                              aria-hidden="true"
+                            />
                             <span className="font-medium">{room.name}</span>
                           </div>
                           {room.lastMessage && (
-                            <p className="text-sm text-gray-500 truncate mt-1">{room.lastMessage}</p>
+                            <p className="text-sm text-gray-500 truncate mt-1">
+                              {room.lastMessage}
+                            </p>
                           )}
                         </div>
                       ))}
@@ -1266,7 +1230,9 @@ const DashboardPage: React.FC = () => {
               <>
                 {/* Chat Header */}
                 <div className="bg-white p-4 border-b border-gray-200 flex justify-between items-center">
-                  <h2 className="text-xl font-semibold">{state.selectedRoom.name}</h2>
+                  <h2 className="text-xl font-semibold">
+                    {state.selectedRoom.name}
+                  </h2>
                   <div className="flex items-center space-x-2">
                     <input
                       type="text"
@@ -1296,7 +1262,7 @@ const DashboardPage: React.FC = () => {
                 {/* Messages */}
                 <div className="flex-1 overflow-y-auto p-4" ref={lastMessageRef}>
                   {isLoadingMessages ? (
-                    <Spinner /> // Using the Spinner component
+                    <Spinner />
                   ) : (
                     <AnimatePresence>
                       {messagesData?.pages.map((page, i) => (
@@ -1317,7 +1283,9 @@ const DashboardPage: React.FC = () => {
                               }
                               return decryptedContent
                                 .toLowerCase()
-                                .includes(state.messageSearchQuery.toLowerCase());
+                                .includes(
+                                  state.messageSearchQuery.toLowerCase()
+                                );
                             })
                             .map((msg: Message) => renderMessage(msg))}
                         </React.Fragment>
@@ -1337,11 +1305,18 @@ const DashboardPage: React.FC = () => {
                 {/* Message Input */}
                 <div className="bg-white p-4 border-t border-gray-200">
                   {state.typingUsers.length > 0 && (
-                    <div className="text-sm text-gray-500 italic mb-2" aria-live="polite">
-                      {state.typingUsers.join(', ')} {state.typingUsers.length === 1 ? 'is' : 'are'} typing...
+                    <div
+                      className="text-sm text-gray-500 italic mb-2"
+                      aria-live="polite"
+                    >
+                      {state.typingUsers.join(', ')}{' '}
+                      {state.typingUsers.length === 1 ? 'is' : 'are'} typing...
                     </div>
                   )}
-                  <form onSubmit={handleSendMessage} className="flex items-center space-x-2">
+                  <form
+                    onSubmit={handleSendMessage}
+                    className="flex items-center space-x-2"
+                  >
                     <input
                       type="text"
                       value={state.message}
@@ -1358,9 +1333,13 @@ const DashboardPage: React.FC = () => {
                       type="button"
                       onClick={state.isRecording ? stopRecording : startRecording}
                       className={`p-2 rounded-full ${
-                        state.isRecording ? 'bg-red-600 text-white' : 'bg-gray-200 text-gray-600'
+                        state.isRecording
+                          ? 'bg-red-600 text-white'
+                          : 'bg-gray-200 text-gray-600'
                       } hover:opacity-80`}
-                      aria-label={state.isRecording ? 'Stop recording' : 'Start recording'}
+                      aria-label={
+                        state.isRecording ? 'Stop recording' : 'Start recording'
+                      }
                     >
                       <Mic size={20} aria-hidden="true" />
                     </button>
@@ -1368,7 +1347,10 @@ const DashboardPage: React.FC = () => {
                       <button
                         type="button"
                         onClick={() =>
-                          dispatch({ type: 'SET_SHOW_EMOJI_PICKER', payload: !state.showEmojiPicker })
+                          dispatch({
+                            type: 'SET_SHOW_EMOJI_PICKER',
+                            payload: !state.showEmojiPicker,
+                          })
                         }
                         className="p-2 rounded-full bg-gray-200 text-gray-600 hover:bg-gray-300"
                         aria-label="Open emoji picker"
@@ -1383,7 +1365,10 @@ const DashboardPage: React.FC = () => {
                                 type: 'SET_MESSAGE',
                                 payload: state.message + emojiObject.emoji,
                               });
-                              dispatch({ type: 'SET_SHOW_EMOJI_PICKER', payload: false });
+                              dispatch({
+                                type: 'SET_SHOW_EMOJI_PICKER',
+                                payload: false,
+                              });
                             }}
                           />
                         </div>
@@ -1399,7 +1384,10 @@ const DashboardPage: React.FC = () => {
                           if (files) {
                             dispatch({
                               type: 'SET_ATTACHMENTS',
-                              payload: [...state.attachments, ...Array.from(files)],
+                              payload: [
+                                ...state.attachments,
+                                ...Array.from(files),
+                              ],
                             });
                           }
                         }}
@@ -1418,13 +1406,20 @@ const DashboardPage: React.FC = () => {
                   {state.attachments.length > 0 && (
                     <div className="mt-2 flex flex-wrap gap-2" aria-label="Attached files">
                       {state.attachments.map((file, index) => (
-                        <div key={index} className="flex items-center bg-gray-100 rounded p-1">
-                          <span className="text-sm truncate max-w-xs">{file.name}</span>
+                        <div
+                          key={index}
+                          className="flex items-center bg-gray-100 rounded p-1"
+                        >
+                          <span className="text-sm truncate max-w-xs">
+                            {file.name}
+                          </span>
                           <button
                             onClick={() =>
                               dispatch({
                                 type: 'SET_ATTACHMENTS',
-                                payload: state.attachments.filter((_, i) => i !== index),
+                                payload: state.attachments.filter(
+                                  (_, i) => i !== index
+                                ),
                               })
                             }
                             className="ml-2 text-red-500 hover:text-red-700"
@@ -1440,17 +1435,22 @@ const DashboardPage: React.FC = () => {
               </>
             ) : (
               <div className="flex-1 flex items-center justify-center">
-                <p className="text-gray-500 text-xl">Select a room to start chatting</p>
+                <p className="text-gray-500 text-xl">
+                  Select a room to start chatting
+                </p>
               </div>
             )}
           </main>
 
           {/* Online Users Sidebar */}
-          <aside className="w-64 bg-white border-l border-gray-200 p-4" aria-label="Online users">
+          <aside
+            className="w-64 bg-white border-l border-gray-200 p-4"
+            aria-label="Online users"
+          >
             <h3 className="font-semibold mb-4">Online Users</h3>
             <div className="space-y-2">
               {isLoadingOnlineUsers ? (
-                <Spinner /> // Using the Spinner component
+                <Spinner />
               ) : (
                 onlineUsers?.map((user: User) => (
                   <div key={user._id} className="flex items-center">
@@ -1576,7 +1576,9 @@ const DashboardPage: React.FC = () => {
             <p>Are you sure you want to delete this message?</p>
             <div className="flex justify-end space-x-2 mt-4">
               <button
-                onClick={() => dispatch({ type: 'SET_SHOW_DELETE_CONFIRMATION', payload: false })}
+                onClick={() =>
+                  dispatch({ type: 'SET_SHOW_DELETE_CONFIRMATION', payload: false })
+                }
                 className="px-4 py-2 bg-gray-300 text-gray-800 rounded hover:bg-gray-400 transition duration-300"
               >
                 Cancel
