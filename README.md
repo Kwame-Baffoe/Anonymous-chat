@@ -38,6 +38,17 @@ College Buzz is an anonymous chatting platform tailored for college students. Th
    - **Importance**: Ensures the platform remains respectful and aligned with community guidelines, creating a positive space for all users.
    - **Functionality**: Users can report inappropriate content, and moderators can issue warnings, delete posts, or restrict access to maintain a safe, respectful environment.
 
+
+     ## Future Development Ideas
+
+Looking ahead, here are some exciting potential features to expand College Buzz:
+
+- **Voice and Video Chat Integration**: Allow students to communicate over voice or video in study groups or for virtual events.
+- **Event Calendar**: Create a calendar where users can see upcoming events, like campus activities, study sessions, or Q&A events hosted within College Buzz.
+- **Study Resources and Collaborative Tools**: Offer shared document or note-taking tools where students can collaborate in real-time on assignments or projects.
+- **Cross-Campus Connectivity**: Allow students from multiple campuses to join College Buzz, fostering broader communities and shared experiences.
+
+
 ---
 
 ## Getting Started with College Buzz
@@ -58,6 +69,7 @@ yarn dev
 pnpm dev
 # or
 bun dev
+```
 
 This will start a local server at http://localhost:3000 where you can view and interact with the application.
 
@@ -126,17 +138,6 @@ As College Buzz grows, support and community feedback will be key to maintaining
 - **Feedback Mechanism**: Include a feedback form or survey feature for users to share their thoughts and suggest improvements.
 - **Community Guidelines**: Create a set of community guidelines to foster a respectful environment, making these guidelines visible within the app.
 - **Help and Resources**: Offer support resources within the app, like a FAQ or “Getting Started” guide, to help new users navigate the platform easily.
-
----
-
-## Future Development Ideas
-
-Looking ahead, here are some exciting potential features to expand College Buzz:
-
-- **Voice and Video Chat Integration**: Allow students to communicate over voice or video in study groups or for virtual events.
-- **Event Calendar**: Create a calendar where users can see upcoming events, like campus activities, study sessions, or Q&A events hosted within College Buzz.
-- **Study Resources and Collaborative Tools**: Offer shared document or note-taking tools where students can collaborate in real-time on assignments or projects.
-- **Cross-Campus Connectivity**: Allow students from multiple campuses to join College Buzz, fostering broader communities and shared experiences.
 
 ---
 
