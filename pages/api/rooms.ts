@@ -70,9 +70,14 @@ async function handleGetRooms(
         ) as is_participant
       FROM rooms r
       LEFT JOIN room_participants rp ON r.id = rp.room_id
-      LEFT JOIN messages m ON r.id = m.room_id
+      LEFT JOIN (
+        SELECT DISTINCT ON (room_id) *
+        FROM messages
+        ORDER BY room_id, created_at DESC
+      ) m ON r.id = m.room_id
       LEFT JOIN users u ON m.user_id = u.id
-      GROUP BY r.id, m.id, u.id
+      GROUP BY r.id, r.name, r.created_at, r.updated_at,
+               m.content, m.created_at, u.name
       ORDER BY r.${sort === 'name' ? 'name' : 'updated_at'} DESC
       LIMIT $2 OFFSET $3`,
       [userId, limitNumber, offset]

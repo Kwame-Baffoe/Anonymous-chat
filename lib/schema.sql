@@ -6,8 +6,12 @@ CREATE TABLE IF NOT EXISTS users (
     password VARCHAR(255) NOT NULL,
     image VARCHAR(255),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    last_active TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Create index for last_active to optimize online users query
+CREATE INDEX IF NOT EXISTS idx_users_last_active ON users(last_active);
 
 -- Create indexes for users table
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);

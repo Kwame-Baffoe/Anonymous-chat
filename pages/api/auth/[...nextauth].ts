@@ -23,6 +23,37 @@ declare module "next-auth" {
   }
 }
 
+// Create auth_logs table
+async function initAuthLogsTable() {
+  try {
+    // Create table
+    await query(`
+      CREATE TABLE IF NOT EXISTS auth_logs (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id),
+        action VARCHAR(50) NOT NULL,
+        success BOOLEAN DEFAULT true,
+        ip_address VARCHAR(45),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Create indexes
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_auth_logs_user_id ON auth_logs(user_id);
+    `);
+
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_auth_logs_created_at ON auth_logs(created_at);
+    `);
+  } catch (error) {
+    console.error('Error initializing auth_logs table:', error);
+  }
+}
+
+// Initialize tables
+initAuthLogsTable().catch(console.error);
+
 export const authOptions: NextAuthOptions = {
   providers: [
     CredentialsProvider({
@@ -163,26 +194,5 @@ export const authOptions: NextAuthOptions = {
     },
   },
 };
-
-// Create auth_logs table if it doesn't exist
-query(`
-  CREATE TABLE IF NOT EXISTS auth_logs (
-    id SERIAL PRIMARY KEY,
-    user_id INTEGER REFERENCES users(id),
-    action VARCHAR(50) NOT NULL,
-    success BOOLEAN DEFAULT true,
-    ip_address VARCHAR(45),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-  );
-`).catch(console.error);
-
-// Create index for faster lookups
-query(`
-  CREATE INDEX IF NOT EXISTS idx_auth_logs_user_id ON auth_logs(user_id);
-`).catch(console.error);
-
-query(`
-  CREATE INDEX IF NOT EXISTS idx_auth_logs_created_at ON auth_logs(created_at);
-`).catch(console.error);
 
 export default NextAuth(authOptions);
