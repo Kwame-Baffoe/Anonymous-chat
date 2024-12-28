@@ -11,11 +11,11 @@ const pool = new Pool({
   port: parseInt(process.env.POSTGRES_PORT || '5432'),
   database: process.env.POSTGRES_DB,
   ssl: process.env.NODE_ENV === 'production' ? {
-    rejectUnauthorized: false
+    rejectUnauthorized: true
   } : undefined,
-  max: 20,
+  max: parseInt(process.env.POSTGRES_POOL_MAX || '20'),
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+  connectionTimeoutMillis: 5000,
 });
 
 // Add error handler to the pool
@@ -35,76 +35,104 @@ pool.connect((err, client, done) => {
 });
 
 export async function query(text: string, params?: any[]) {
-  let client;
-  try {
-    console.log('Attempting to establish database connection...');
-    client = await pool.connect();
-    console.log('Database connection established successfully');
-    
-    console.log('Executing query:', {
-      text,
-      params,
-      timestamp: new Date().toISOString()
-    });
-    
-    const result = await client.query(text, params);
-    console.log('Query result:', {
-      rowCount: result.rowCount,
-      fields: result.fields.map(f => f.name),
-      timestamp: new Date().toISOString()
-    });
-    
-    if (result.rows.length > 0) {
-      console.log('Sample row (first row):', {
-        ...result.rows[0],
-        password: result.rows[0]?.password ? '[REDACTED]' : undefined
+  const retries = 3;
+  let lastError;
+  
+  for (let i = 0; i < retries; i++) {
+    let client;
+    try {
+      console.log('Attempting to establish database connection...');
+      client = await pool.connect();
+      console.log('Database connection established successfully');
+      
+      console.log('Executing query:', {
+        text,
+        params,
+        attempt: i + 1,
+        timestamp: new Date().toISOString()
       });
-    }
-    
-    return result;
-  } catch (error) {
-    console.error('Database query error:', error);
-    if (error instanceof Error) {
-      if (error.message.includes('connection')) {
-        throw new Error('Database connection failed. Please try again later.');
+      
+      const result = await client.query(text, params);
+      console.log('Query result:', {
+        rowCount: result.rowCount,
+        fields: result.fields.map(f => f.name),
+        timestamp: new Date().toISOString()
+      });
+      
+      if (result.rows.length > 0) {
+        console.log('Sample row (first row):', {
+          ...result.rows[0],
+          password: result.rows[0]?.password ? '[REDACTED]' : undefined
+        });
       }
-      throw new Error(`Database error: ${error.message}`);
-    }
-    throw new Error('An unexpected database error occurred');
-  } finally {
-    if (client) {
-      console.log('Releasing database connection');
-      client.release();
+      
+      return result;
+    } catch (error) {
+      lastError = error;
+      console.error(`Database query error (attempt ${i + 1}):`, error);
+      
+      if (error instanceof Error) {
+        if (error.message.includes('connection')) {
+          if (i < retries - 1) {
+            const delay = (i + 1) * 1000;
+            console.log(`Retrying in ${delay}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          }
+          throw new Error('Database connection failed after multiple attempts. Please try again later.');
+        }
+        throw new Error(`Database error: ${error.message}`);
+      }
+      throw new Error('An unexpected database error occurred');
+    } finally {
+      if (client) {
+        console.log('Releasing database connection');
+        client.release();
+      }
     }
   }
+  throw lastError;
 }
 
 export async function transaction<T>(callback: (client: any) => Promise<T>) {
   let client;
-  try {
-    client = await pool.connect();
-    console.log('Transaction: Beginning database transaction');
-    
-    await client.query('BEGIN');
-    const result = await callback(client);
-    await client.query('COMMIT');
-    
-    console.log('Transaction: Successfully committed');
-    return result;
-  } catch (error) {
-    console.error('Transaction error:', error);
-    if (client) {
-      console.log('Transaction: Rolling back due to error');
-      await client.query('ROLLBACK');
-    }
-    if (error instanceof Error) {
-      throw new Error(`Transaction failed: ${error.message}`);
-    }
-    throw new Error('Transaction failed: An unexpected error occurred');
-  } finally {
-    if (client) {
-      console.log('Transaction: Releasing database connection');
-      client.release();
+  let retries = 3;
+  
+  while (retries > 0) {
+    try {
+      client = await pool.connect();
+      console.log('Transaction: Beginning database transaction');
+      
+      await client.query('BEGIN');
+      const result = await callback(client);
+      await client.query('COMMIT');
+      
+      console.log('Transaction: Successfully committed');
+      return result;
+    } catch (error) {
+      console.error('Transaction error:', error);
+      if (client) {
+        console.log('Transaction: Rolling back due to error');
+        await client.query('ROLLBACK');
+      }
+      
+      retries--;
+      if (retries > 0 && error instanceof Error && error.message.includes('connection')) {
+        const delay = (3 - retries) * 1000;
+        console.log(`Retrying transaction in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      
+      if (error instanceof Error) {
+        throw new Error(`Transaction failed: ${error.message}`);
+      }
+      throw new Error('Transaction failed: An unexpected error occurred');
+    } finally {
+      if (client) {
+        console.log('Transaction: Releasing database connection');
+        client.release();
+      }
     }
   }
 }

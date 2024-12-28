@@ -33,10 +33,12 @@ const LoginPage = () => {
     setLoading(true);
     try {
       console.log('Attempting login with email:', formData.email);
+      // Ensure password is in the same format as during signup
+      const password = formData.password.trim();
       const result = await signIn('credentials', {
         redirect: false,
-        email: formData.email,
-        password: formData.password,
+        email: formData.email.trim().toLowerCase(),
+        password: password,
         callbackUrl: '/dashboard'
       });
 

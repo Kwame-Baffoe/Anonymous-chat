@@ -30,6 +30,9 @@ export async function getUserByEmail(email: string): Promise<User | null> {
     if (!email) {
       throw new Error('Email is required');
     }
+
+    // Normalize email
+    email = email.trim().toLowerCase();
     
     const result = await query(
       'SELECT * FROM users WHERE email = $1',
@@ -167,6 +170,10 @@ export async function validateUserCredentials(email: string, password: string): 
     console.error('Missing credentials');
     throw new Error('Email and password are required');
   }
+
+  // Normalize email and password
+  email = email.trim().toLowerCase();
+  password = password.trim();
 
   console.log('Attempting to validate credentials for email:', email);
   

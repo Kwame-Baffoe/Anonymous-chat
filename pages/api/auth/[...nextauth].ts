@@ -1,7 +1,27 @@
-import NextAuth, { NextAuthOptions } from 'next-auth';
+import NextAuth, { NextAuthOptions, Session, User } from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
 import { validateUserCredentials } from '../../../lib/users';
 import { query } from '../../../lib/postgresql';
+import { rateLimit } from '../../../lib/rate-limit';
+
+// Extend Session type to include custom properties
+declare module "next-auth" {
+  interface Session {
+    user: User & {
+      id: string;
+      email: string;
+      name: string;
+    };
+    iat?: number;
+  }
+
+  interface JWT {
+    id?: string;
+    email?: string;
+    name?: string;
+    iat?: number;
+  }
+}
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -11,12 +31,31 @@ export const authOptions: NextAuthOptions = {
         email: { label: 'Email', type: 'email' },
         password: { label: 'Password', type: 'password' },
       },
-      async authorize(credentials) {
+      async authorize(credentials, req) {
         if (!credentials?.email || !credentials?.password) {
           throw new Error('Email and password are required');
         }
 
         try {
+          // Apply rate limiting
+          try {
+            // Create a minimal request object for rate limiting
+            const apiReq = {
+              headers: req?.headers || {},
+              method: req?.method || 'POST',
+              body: req?.body || {},
+              query: req?.query || {},
+              // Add IP address from headers for rate limiting
+              ip: req?.headers?.['x-forwarded-for']?.toString() || 
+                  req?.headers?.['x-real-ip']?.toString() || 
+                  'unknown'
+            };
+            
+            await rateLimit(apiReq as any, 'login');
+          } catch (error) {
+            throw new Error('Too many login attempts. Please try again later.');
+          }
+
           console.log('Starting credential validation for email:', credentials.email);
           console.log('Starting credential validation...');
           const user = await validateUserCredentials(credentials.email, credentials.password);
@@ -44,16 +83,29 @@ export const authOptions: NextAuthOptions = {
   ],
   session: {
     strategy: 'jwt',
-    maxAge: 30 * 24 * 60 * 60, // 30 days
+    maxAge: 7 * 24 * 60 * 60, // 7 days instead of 30
     updateAge: 24 * 60 * 60, // 24 hours
   },
   jwt: {
-    maxAge: 30 * 24 * 60 * 60, // 30 days
+    maxAge: 7 * 24 * 60 * 60, // 7 days instead of 30
   },
   callbacks: {
     async signIn({ user, account, profile, email, credentials }) {
-      console.log('SignIn Callback:', { user, account, profile, email, credentials });
-      return true;
+      try {
+        console.log('SignIn Callback:', { user, account, profile, email, credentials });
+        
+        // Log successful login attempt
+        await query(
+          `INSERT INTO auth_logs (user_id, action, success, ip_address, created_at)
+           VALUES ($1, 'login', true, $2, CURRENT_TIMESTAMP)`,
+          [user.id, 'unknown'] // IP address logging moved to rate limiting
+        );
+        
+        return true;
+      } catch (error) {
+        console.error('Error in signIn callback:', error);
+        return true; // Still allow sign in even if logging fails
+      }
     },
     async jwt({ token, user, account, profile }) {
       console.log('JWT Callback - Input:', { token, user, account, profile });
@@ -61,6 +113,7 @@ export const authOptions: NextAuthOptions = {
         token.id = user.id;
         token.email = user.email;
         token.name = user.name;
+        token.iat = Math.floor(Date.now() / 1000);
       }
       console.log('JWT Callback - Output token:', token);
       return token;
@@ -71,7 +124,7 @@ export const authOptions: NextAuthOptions = {
         session.user.id = token.id as string;
         session.user.email = token.email as string;
         session.user.name = token.name as string;
-        session.accessToken = token.id as string;
+        session.iat = token.iat as number | undefined;
       }
       console.log('Session Callback - Output session:', session);
       return session;
@@ -82,7 +135,7 @@ export const authOptions: NextAuthOptions = {
     error: '/auth/error',
   },
   secret: process.env.NEXTAUTH_SECRET,
-  debug: true, // Enable debug mode to get more detailed logs
+  debug: process.env.NODE_ENV === 'development', // Only enable debug in development
   logger: {
     error(code, ...message) {
       console.error('NextAuth Error:', { code, message });
@@ -91,7 +144,9 @@ export const authOptions: NextAuthOptions = {
       console.warn('NextAuth Warning:', { code, message });
     },
     debug(code, ...message) {
-      console.log('NextAuth Debug:', { code, message });
+      if (process.env.NODE_ENV === 'development') {
+        console.log('NextAuth Debug:', { code, message });
+      }
     },
   },
   events: {
@@ -108,5 +163,26 @@ export const authOptions: NextAuthOptions = {
     },
   },
 };
+
+// Create auth_logs table if it doesn't exist
+query(`
+  CREATE TABLE IF NOT EXISTS auth_logs (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id),
+    action VARCHAR(50) NOT NULL,
+    success BOOLEAN DEFAULT true,
+    ip_address VARCHAR(45),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  );
+`).catch(console.error);
+
+// Create index for faster lookups
+query(`
+  CREATE INDEX IF NOT EXISTS idx_auth_logs_user_id ON auth_logs(user_id);
+`).catch(console.error);
+
+query(`
+  CREATE INDEX IF NOT EXISTS idx_auth_logs_created_at ON auth_logs(created_at);
+`).catch(console.error);
 
 export default NextAuth(authOptions);

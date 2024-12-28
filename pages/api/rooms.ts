@@ -50,7 +50,7 @@ async function handleGetRooms(
   userId: string
 ) {
   console.log('Fetching chat rooms');
-  const { page = '1', limit = '10', sort = 'updated_at' } = req.query;
+  const { page = '1', limit = '20', sort = 'updated_at' } = req.query;
   const pageNumber = parseInt(page as string, 10);
   const limitNumber = parseInt(limit as string, 10);
   const offset = (pageNumber - 1) * limitNumber;
@@ -136,25 +136,25 @@ async function handleCreateRoom(
     }
 
     // Create room and add creator as participant in a transaction
-    const result = await query(
-      `WITH new_room AS (
-        INSERT INTO rooms (name, created_at, updated_at)
-        VALUES ($1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        RETURNING *
-      )
-      INSERT INTO room_participants (room_id, user_id, joined_at)
-      SELECT id, $2, CURRENT_TIMESTAMP
-      FROM new_room
-      RETURNING (SELECT * FROM new_room)`,
-      [sanitizedRoomName, userId]
+    const newRoom = await query(
+      `INSERT INTO rooms (name, created_at, updated_at)
+       VALUES ($1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       RETURNING *`,
+      [sanitizedRoomName]
     );
 
-    const newRoom = result.rows[0];
-    console.log('Room created successfully with ID:', newRoom.id);
+    // Add creator as participant
+    await query(
+      `INSERT INTO room_participants (room_id, user_id, joined_at)
+       VALUES ($1, $2, CURRENT_TIMESTAMP)`,
+      [newRoom.rows[0].id, userId]
+    );
+
+    console.log('Room created successfully with ID:', newRoom.rows[0].id);
     
     return res.status(201).json({
       success: true,
-      data: newRoom,
+      data: newRoom.rows[0],
     });
   } catch (error) {
     console.error('Error creating room:', error);

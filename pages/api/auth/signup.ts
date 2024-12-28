@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createUser, getUserByEmail } from '../../../lib/users';
-import bcrypt from 'bcryptjs';
+import { rateLimit } from '../../../lib/rate-limit';
 
 interface SignupResponse {
   success: boolean;
@@ -11,6 +11,41 @@ interface SignupResponse {
     email: string;
   };
 }
+
+const validatePassword = (password: string): { isValid: boolean; message: string } => {
+  const minLength = 12;
+  const hasUpperCase = /[A-Z]/.test(password);
+  const hasLowerCase = /[a-z]/.test(password);
+  const hasNumbers = /[0-9]/.test(password);
+  const hasSpecialChar = /[^A-Za-z0-9]/.test(password);
+
+  if (password.length < minLength) {
+    return { isValid: false, message: `Password must be at least ${minLength} characters long` };
+  }
+  if (!hasUpperCase) {
+    return { isValid: false, message: 'Password must contain at least one uppercase letter' };
+  }
+  if (!hasLowerCase) {
+    return { isValid: false, message: 'Password must contain at least one lowercase letter' };
+  }
+  if (!hasNumbers) {
+    return { isValid: false, message: 'Password must contain at least one number' };
+  }
+  if (!hasSpecialChar) {
+    return { isValid: false, message: 'Password must contain at least one special character' };
+  }
+
+  return { isValid: true, message: '' };
+};
+
+const validateEmail = (email: string): boolean => {
+  const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+  return emailRegex.test(email);
+};
+
+const validateName = (name: string): boolean => {
+  return name.length >= 2 && name.length <= 50 && /^[a-zA-Z0-9\s-]+$/.test(name);
+};
 
 export default async function handler(
   req: NextApiRequest, 
@@ -25,7 +60,19 @@ export default async function handler(
   }
 
   try {
-    const { name, email, password } = req.body;
+    // Apply rate limiting
+    try {
+      await rateLimit(req, 'signup');
+    } catch (error) {
+      return res.status(429).json({
+        success: false,
+        message: 'Too many signup attempts. Please try again later.'
+      });
+    }
+
+    const name = req.body.name?.trim();
+    const email = req.body.email?.trim().toLowerCase();
+    const password = req.body.password?.trim();
 
     // Validate required fields
     if (!name || !email || !password) {
@@ -35,9 +82,16 @@ export default async function handler(
       });
     }
 
+    // Validate name
+    if (!validateName(name)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name must be between 2 and 50 characters and contain only letters, numbers, spaces, and hyphens'
+      });
+    }
+
     // Validate email format
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
+    if (!validateEmail(email)) {
       return res.status(400).json({ 
         success: false, 
         message: 'Invalid email format' 
@@ -45,10 +99,11 @@ export default async function handler(
     }
 
     // Validate password strength
-    if (password.length < 8) {
+    const passwordValidation = validatePassword(password);
+    if (!passwordValidation.isValid) {
       return res.status(400).json({ 
         success: false, 
-        message: 'Password must be at least 8 characters long' 
+        message: passwordValidation.message 
       });
     }
 
@@ -61,15 +116,12 @@ export default async function handler(
       });
     }
 
-    // Hash the password
-    const hashedPassword = await bcrypt.hash(password, 12);
-
     try {
-      // Create the user
+      // Create the user (password hashing is handled in createUser)
       const user = await createUser({
         name,
         email,
-        password: hashedPassword,
+        password,
       });
 
       // Return success without sensitive data
