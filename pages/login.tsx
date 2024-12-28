@@ -32,19 +32,38 @@ const LoginPage = () => {
 
     setLoading(true);
     try {
+      console.log('Attempting login with email:', formData.email);
       const result = await signIn('credentials', {
         redirect: false,
         email: formData.email,
         password: formData.password,
+        callbackUrl: '/dashboard'
+      });
+
+      console.log('SignIn result:', { 
+        ok: result?.ok,
+        status: result?.status,
+        error: result?.error,
+        url: result?.url 
       });
 
       if (result?.error) {
-        setError(result.error);
+        console.error('Login error:', result.error);
+        if (result.error === 'CredentialsSignin') {
+          setError('Invalid email or password');
+        } else {
+          setError(result.error);
+        }
+      } else if (result?.ok) {
+        console.log('Login successful, redirecting to:', result.url);
+        await router.push(result.url || '/dashboard');
       } else {
-        router.push('/dashboard');
+        console.error('Unexpected login result:', result);
+        setError('Authentication failed. Please try again.');
       }
     } catch (err) {
-      setError('An unexpected error occurred. Please try again.');
+      console.error('Login exception:', err);
+      setError('Authentication service unavailable. Please try again later.');
     } finally {
       setLoading(false);
     }
