@@ -90,15 +90,26 @@ async function getMessages(req: NextApiRequest, res: NextApiResponse) {
     const totalMessages = parseInt(countResult.rows[0].total);
 
     console.log(`Fetched ${messagesResult.rows.length} messages for room ${roomId}`);
+    // Transform messages to match frontend format
+    const transformedMessages = messagesResult.rows.map(msg => ({
+      _id: msg.id.toString(),
+      roomId: msg.room_id.toString(),
+      userId: msg.user_id.toString(),
+      username: msg.username,
+      content: msg.content,
+      createdAt: msg.created_at.toISOString(),
+      updatedAt: msg.updated_at?.toISOString(),
+      reactions: msg.reactions || {},
+      attachments: msg.attachments || [],
+      isEdited: msg.created_at.getTime() !== msg.updated_at?.getTime(),
+      readBy: msg.read_by || [],
+      parentId: msg.parent_id?.toString(),
+      thread: msg.thread || []
+    }));
+
     return res.status(200).json({
-      success: true,
-      data: messagesResult.rows,
-      pagination: {
-        currentPage: pageNumber,
-        totalPages: Math.ceil(totalMessages / limitNumber),
-        totalMessages,
-        hasMore: pageNumber * limitNumber < totalMessages,
-      },
+      results: transformedMessages,
+      nextPage: pageNumber * limitNumber < totalMessages ? pageNumber + 1 : null
     });
   } catch (error) {
     console.error('Error fetching messages:', error);
@@ -166,7 +177,23 @@ async function createMessage(req: NextApiRequest, res: NextApiResponse, session:
     };
 
     console.log(`Created new message in room ${roomId}`);
-    return res.status(201).json({ success: true, data: message });
+    // Transform message to match frontend format
+    const transformedMessage = {
+      _id: message.id.toString(),
+      roomId: message.room_id.toString(),
+      userId: message.user_id.toString(),
+      username: message.username,
+      content: message.content,
+      createdAt: message.created_at.toISOString(),
+      updatedAt: message.updated_at?.toISOString(),
+      reactions: {},
+      attachments: [],
+      isEdited: false,
+      readBy: [],
+      thread: []
+    };
+
+    return res.status(201).json(transformedMessage);
   } catch (error) {
     console.error('Error creating message:', error);
     return res.status(500).json({ success: false, error: 'Error creating message' });

@@ -1038,17 +1038,24 @@ const DashboardPage: React.FC = () => {
   const createRoom = async (roomName: string) => {
     try {
       const { data } = await api.post<Room>('/rooms', { name: roomName });
-      queryClient.setQueryData<ApiResponse<Room>>('rooms', (oldData) => {
-        if (!oldData) return { results: [data], nextPage: null };
+      queryClient.setQueryData(['rooms'], (oldData: any) => {
+        if (!oldData) return { pages: [{ results: [data], nextPage: null }] };
         return {
           ...oldData,
-          results: [data, ...oldData.results],
+          pages: [
+            { 
+              ...oldData.pages[0],
+              results: [data, ...(oldData.pages[0]?.results || [])]
+            },
+            ...oldData.pages.slice(1)
+          ]
         };
       });
       Swal.fire('Success', 'Room created successfully', 'success');
-    } catch (error) {
+    } catch (error: any) {
       Logger.error('Error creating room:', error);
-      Swal.fire('Error', 'Failed to create room', 'error');
+      const errorMessage = error.response?.data?.error || 'Failed to create room';
+      Swal.fire('Error', errorMessage, 'error');
     }
   };
 
@@ -1122,23 +1129,32 @@ const DashboardPage: React.FC = () => {
             className="w-64 bg-white border-r border-gray-200 flex flex-col"
             aria-label="Chat rooms"
           >
-            <div className="p-4">
+            <div className="p-4 border-b border-gray-200">
               <div className="relative">
                 <input
                   type="text"
-                  placeholder="Search rooms..."
+                  placeholder="Search rooms by name or last message..."
                   value={state.searchQuery}
                   onChange={(e) =>
                     dispatch({ type: 'SET_SEARCH_QUERY', payload: e.target.value })
                   }
-                  className="w-full px-3 py-2 pl-10 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full px-4 py-3 pl-12 border-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all duration-200"
                   aria-label="Search rooms"
                 />
                 <Search
-                  className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"
-                  size={18}
+                  className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400"
+                  size={20}
                   aria-hidden="true"
                 />
+                {state.searchQuery && (
+                  <button
+                    onClick={() => dispatch({ type: 'SET_SEARCH_QUERY', payload: '' })}
+                    className="absolute right-4 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    aria-label="Clear search"
+                  >
+                    <X size={16} />
+                  </button>
+                )}
               </div>
             </div>
             <div className="flex-1 overflow-y-auto">
@@ -1148,17 +1164,25 @@ const DashboardPage: React.FC = () => {
                 roomsData?.pages.map((page, i) => (
                   <React.Fragment key={i}>
                     {(page.results || [])
-                      .filter((room) =>
-                        room.name
-                          .toLowerCase()
-                          .includes(state.searchQuery.toLowerCase())
-                      )
+                      .filter((room) => {
+                        const searchQuery = state.searchQuery.toLowerCase();
+                        return (
+                          (room?.name && room.name.toLowerCase().includes(searchQuery)) ||
+                          (room?.lastMessage && room.lastMessage.toLowerCase().includes(searchQuery))
+                        );
+                      })
                       .map((room: Room) => (
                         <div
                           key={room._id}
-                          className={`p-3 hover:bg-gray-100 cursor-pointer ${
+                          className={`p-4 hover:bg-gray-100 cursor-pointer transition-colors duration-200 ${
                             state.selectedRoom?._id === room._id
                               ? 'bg-indigo-100'
+                              : ''
+                          } ${
+                            state.searchQuery && 
+                            ((room?.name && room.name.toLowerCase().includes(state.searchQuery.toLowerCase())) ||
+                            (room?.lastMessage && room.lastMessage.toLowerCase().includes(state.searchQuery.toLowerCase())))
+                              ? 'ring-2 ring-indigo-300'
                               : ''
                           }`}
                           onClick={() =>
@@ -1265,10 +1289,10 @@ const DashboardPage: React.FC = () => {
                     <Spinner />
                   ) : (
                     <AnimatePresence>
-                      {messagesData?.pages.map((page, i) => (
-                        <React.Fragment key={i}>
+                      {messagesData?.pages.map((page, pageIndex) => (
+                        <React.Fragment key={`page-${pageIndex}`}>
                           {page.results
-                            .filter((msg) => {
+                            .filter((msg: Message) => {
                               const myPrivateKey = session?.user.privateKey || '';
                               let decryptedContent = '';
                               try {

@@ -9,6 +9,7 @@ export interface User {
   image?: string;
   created_at: Date;
   updated_at: Date;
+  privateKey: string;
 }
 
 export interface CreateUserData {

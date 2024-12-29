@@ -7,11 +7,7 @@ import { rateLimit } from '../../../lib/rate-limit';
 // Extend Session type to include custom properties
 declare module "next-auth" {
   interface Session {
-    user: User & {
-      id: string;
-      email: string;
-      name: string;
-    };
+    user: User;
     iat?: number;
   }
 
@@ -19,6 +15,7 @@ declare module "next-auth" {
     id?: string;
     email?: string;
     name?: string;
+    privateKey?: string;
     iat?: number;
   }
 }
@@ -100,7 +97,8 @@ export const authOptions: NextAuthOptions = {
           const userData = {
             id: user.id.toString(),
             email: user.email,
-            name: user.name
+            name: user.name,
+            privateKey: user.privateKey
           };
           console.log('Returning user data:', userData);
           
@@ -144,6 +142,7 @@ export const authOptions: NextAuthOptions = {
         token.id = user.id;
         token.email = user.email;
         token.name = user.name;
+        token.privateKey = user.privateKey;
         token.iat = Math.floor(Date.now() / 1000);
       }
       console.log('JWT Callback - Output token:', token);
@@ -155,6 +154,7 @@ export const authOptions: NextAuthOptions = {
         session.user.id = token.id as string;
         session.user.email = token.email as string;
         session.user.name = token.name as string;
+        session.user.privateKey = token.privateKey as string;
         session.iat = token.iat as number | undefined;
       }
       console.log('Session Callback - Output session:', session);

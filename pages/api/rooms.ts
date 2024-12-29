@@ -92,15 +92,20 @@ async function handleGetRooms(
     const totalRooms = parseInt(countResult.rows[0].total);
     const totalPages = Math.ceil(totalRooms / limitNumber);
 
+    // Transform the data to match frontend expectations
+    const transformedRooms = roomsResult.rows.map(room => ({
+      _id: room.id.toString(),
+      name: room.name,
+      createdAt: room.created_at.toISOString(),
+      createdBy: room.created_by || '',
+      lastMessage: room.last_message || '',
+      lastMessageAt: room.last_message_at ? room.last_message_at.toISOString() : undefined,
+      publicKey: room.public_key || ''
+    }));
+
     return res.status(200).json({
-      success: true,
-      data: roomsResult.rows,
-      pagination: {
-        currentPage: pageNumber,
-        totalPages,
-        totalRooms,
-        hasMore: pageNumber < totalPages,
-      },
+      results: transformedRooms,
+      nextPage: pageNumber < totalPages ? pageNumber + 1 : null
     });
   } catch (error) {
     console.error('Error fetching rooms:', error);
@@ -127,19 +132,6 @@ async function handleCreateRoom(
   const sanitizedRoomName = sanitizeHtml(name.trim());
 
   try {
-    // Check if room with the same name already exists
-    const existingRoom = await query(
-      'SELECT id FROM rooms WHERE name = $1',
-      [sanitizedRoomName]
-    );
-    
-    if (existingRoom.rows.length > 0) {
-      console.log('Room creation failed - Room with this name already exists');
-      return res
-        .status(409)
-        .json({ success: false, error: 'A room with this name already exists' });
-    }
-
     // Create room and add creator as participant in a transaction
     const newRoom = await query(
       `INSERT INTO rooms (name, created_at, updated_at)
@@ -157,10 +149,16 @@ async function handleCreateRoom(
 
     console.log('Room created successfully with ID:', newRoom.rows[0].id);
     
-    return res.status(201).json({
-      success: true,
-      data: newRoom.rows[0],
-    });
+    // Transform the response to match frontend expectations
+    const transformedRoom = {
+      _id: newRoom.rows[0].id.toString(),
+      name: newRoom.rows[0].name,
+      createdAt: newRoom.rows[0].created_at.toISOString(),
+      createdBy: userId,
+      publicKey: newRoom.rows[0].public_key || ''
+    };
+
+    return res.status(201).json(transformedRoom);
   } catch (error) {
     console.error('Error creating room:', error);
     return res.status(500).json({ success: false, error: 'Error creating room' });
