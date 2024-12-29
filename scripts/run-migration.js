@@ -1,12 +1,22 @@
-require('dotenv').config({ path: '.env.local' });
+const dotenv = require('dotenv');
 const { query } = require('../lib/postgresql');
 const fs = require('fs');
 const path = require('path');
 
+// Load environment variables from .env.local
+const result = dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
+if (result.error) {
+  throw new Error('Failed to load .env.local file');
+}
+
 async function runMigration() {
   try {
-    console.log('Running migration: add_private_key.sql');
-    const migrationPath = path.join(__dirname, '..', 'lib', 'migrations', 'add_private_key.sql');
+    const migrationFile = process.argv[2];
+    if (!migrationFile) {
+      throw new Error('Please provide a migration file name as an argument');
+    }
+    console.log('Running migration:', migrationFile);
+    const migrationPath = path.join(__dirname, '..', migrationFile);
     const sql = fs.readFileSync(migrationPath, 'utf8');
     
     await query(sql);

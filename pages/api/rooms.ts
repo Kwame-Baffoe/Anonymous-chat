@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from './auth/[...nextauth]';
 import { query } from '../../lib/postgresql';
 import sanitizeHtml from 'xss';
+import { CryptoService } from '../../services/CryptoService';
 
 interface Room {
   id: number;
@@ -132,12 +133,15 @@ async function handleCreateRoom(
   const sanitizedRoomName = sanitizeHtml(name.trim());
 
   try {
+    // Generate key pair for the room
+    const keyPair = CryptoService.generateKeyPair();
+
     // Create room and add creator as participant in a transaction
     const newRoom = await query(
-      `INSERT INTO rooms (name, created_at, updated_at)
-       VALUES ($1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `INSERT INTO rooms (name, public_key, created_at, updated_at)
+       VALUES ($1, $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
        RETURNING *`,
-      [sanitizedRoomName]
+      [sanitizedRoomName, keyPair.publicKey]
     );
 
     // Add creator as participant

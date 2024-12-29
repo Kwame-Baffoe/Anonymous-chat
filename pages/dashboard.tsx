@@ -304,7 +304,7 @@ const DashboardPage: React.FC = () => {
           if (!oldData) return { results: [newMessage], nextPage: null };
           return {
             ...oldData,
-            results: [newMessage, ...oldData.results],
+            results: [newMessage, ...(oldData?.results || [])],
           };
         }
       );
@@ -426,7 +426,7 @@ const DashboardPage: React.FC = () => {
         if (!oldData) return { results: [newRoom], nextPage: null };
         return {
           ...oldData,
-          results: [newRoom, ...oldData.results],
+          results: [newRoom, ...(oldData?.results || [])],
         };
       });
     },
@@ -511,7 +511,7 @@ const DashboardPage: React.FC = () => {
         if (!oldData) return { results: [optimisticMessage], nextPage: null };
         return {
           ...oldData,
-          results: [optimisticMessage, ...oldData.results],
+          results: [optimisticMessage, ...(oldData?.results || [])],
         };
       }
     );

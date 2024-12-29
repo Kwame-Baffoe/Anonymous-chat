@@ -1,4 +1,4 @@
-import { Pool } from 'pg';
+import { Pool, QueryResult } from 'pg';
 
 if (!process.env.POSTGRES_USER || !process.env.POSTGRES_PASSWORD || !process.env.POSTGRES_HOST || !process.env.POSTGRES_DB) {
   throw new Error('Please add PostgreSQL credentials to .env.local');
@@ -34,7 +34,7 @@ pool.connect((err, client, done) => {
   }
 });
 
-export async function query(text: string, params?: any[]) {
+export async function query(text: string, params?: any[]): Promise<QueryResult<any>> {
   const retries = 3;
   let lastError;
   
@@ -45,28 +45,37 @@ export async function query(text: string, params?: any[]) {
       client = await pool.connect();
       console.log('Database connection established successfully');
       
-      console.log('Executing query:', {
-        text,
-        params,
-        attempt: i + 1,
-        timestamp: new Date().toISOString()
-      });
-      
-      const result = await client.query(text, params);
-      console.log('Query result:', {
-        rowCount: result.rowCount,
-        fields: result.fields.map(f => f.name),
-        timestamp: new Date().toISOString()
-      });
-      
-      if (result.rows.length > 0) {
-        console.log('Sample row (first row):', {
-          ...result.rows[0],
-          password: result.rows[0]?.password ? '[REDACTED]' : undefined
+      // Split the query into individual statements
+      const statements = text.split(';').filter(stmt => stmt.trim());
+      let finalResult: QueryResult<any> = {
+        rows: [],
+        rowCount: 0,
+        fields: [],
+        command: '',
+        oid: 0
+      };
+
+      // Execute each statement
+      for (const stmt of statements) {
+        if (!stmt.trim()) continue;
+        
+        console.log('Executing statement:', {
+          text: stmt.trim().split('\n')[0], // Log just the first line
+          attempt: i + 1,
+          timestamp: new Date().toISOString()
         });
+
+        try {
+          const result = await client.query<any>(stmt, params);
+          finalResult = result; // Keep the last result
+          console.log('Statement executed successfully');
+        } catch (error) {
+          console.error('Error executing statement:', error);
+          throw error;
+        }
       }
       
-      return result;
+      return finalResult;
     } catch (error) {
       lastError = error;
       console.error(`Database query error (attempt ${i + 1}):`, error);

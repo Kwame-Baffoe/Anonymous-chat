@@ -3,15 +3,16 @@
 import { NextApiRequest } from 'next';
 import { Server } from 'socket.io';
 import { NextApiResponseServerIO } from '../../types/next';
-import jwt from 'jsonwebtoken'; // For token validation
-import { Message, User } from '../../interfaces'; // Adjust the import paths as needed
+import jwt from 'jsonwebtoken';
+import { Message, User } from '../../interfaces';
+import { query } from '../../lib/postgresql';
 
 export default function handler(req: NextApiRequest, res: NextApiResponseServerIO) {
   if (!res.socket.server.io) {
     console.log('Initializing Socket.io server...');
 
     const io = new Server(res.socket.server, {
-      path: '/api/socket',
+      path: '/api/socketio',
       addTrailingSlash: false, // Ensure the path is correct
     });
 

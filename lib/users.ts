@@ -1,5 +1,6 @@
 import { query, transaction } from './postgresql';
 import bcrypt from 'bcryptjs';
+import { CryptoService } from '../services/CryptoService';
 
 export interface User {
   id: number;
@@ -81,11 +82,14 @@ export async function createUser(userData: CreateUserData): Promise<User> {
     const hashedPassword = await bcrypt.hash(userData.password, 12);
     console.log('Password hashed successfully for new user');
 
+    // Generate encryption keys for the user
+    const keyPair = CryptoService.generateKeyPair();
+
     const result = await query(
-      `INSERT INTO users (name, email, password, image, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `INSERT INTO users (name, email, password, image, private_key, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
        RETURNING *`,
-      [userData.name, userData.email, hashedPassword, userData.image || null]
+      [userData.name, userData.email, hashedPassword, userData.image || null, keyPair.privateKey]
     );
 
     return result.rows[0];
