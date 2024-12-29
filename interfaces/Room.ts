@@ -1,10 +1,10 @@
 // interfaces/Room.ts
-import { ObjectId } from 'mongodb';
-
 export interface Room {
-  _id: ObjectId;
+  _id: string;
   name: string;
   createdAt: Date;
+  publicKey: string;
+  lastMessage?: string;
 }
 
 export interface CreateRoom {

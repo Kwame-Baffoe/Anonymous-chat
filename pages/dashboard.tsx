@@ -1,96 +1,44 @@
-// pages/dashboard.tsx
-
-import React, { useEffect, useCallback, useRef, useReducer } from 'react';
+import React, { useCallback, useEffect, useReducer, useRef } from 'react';
 import { useSession, signOut } from 'next-auth/react';
 import { useRouter } from 'next/router';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
+import axios from 'axios';
+import { v4 as uuidv4 } from 'uuid';
+import Swal from 'sweetalert2';
+import { AnimatePresence, motion } from 'framer-motion';
+import EmojiPicker, { EmojiClickData } from 'emoji-picker-react';
+import Peer from 'simple-peer';
+import { debounce } from 'lodash';
 import {
   MessageSquare,
-  Send,
-  PlusCircle,
+  User,
   LogOut,
-  Search,
-  X,
-  Mic,
-  Smile,
-  Edit,
-  Trash2,
-  Paperclip,
   Phone,
   Video,
-  User,
+  Mic,
+  Smile,
+  Paperclip,
+  Send,
+  Edit,
+  Trash2,
   Check,
-} from 'lucide-react';
-import Swal from 'sweetalert2';
-import { motion, AnimatePresence } from 'framer-motion';
-import debounce from 'lodash/debounce';
-import EmojiPicker, { EmojiClickData } from 'emoji-picker-react';
-import { v4 as uuidv4 } from 'uuid';
+  Search,
+  X,
+  PlusCircle,
+} from 'react-feather';
 import { ErrorBoundary } from 'react-error-boundary';
+import { useSocket } from '../hooks/useSocket';
+import { Message } from '../interfaces/Message';
+import { Room } from '../interfaces/Room';
+import { User as UserType } from '../interfaces/User';
+import { ApiResponse } from '../types/api';
+import { Attachment } from '../interfaces/Message';
+import { CryptoService } from '../services/CryptoService';
 import { Logger } from '../utils/Logger';
 import { UserProfileModal } from '../components/UserProfileModal';
 import { VoiceVideoCallModal } from '../components/VoiceVideoCallModal';
 import { MessageThreadModal } from '../components/MessageThreadModal';
-import {
-  useInfiniteQuery,
-  useQuery,
-  useMutation,
-  useQueryClient,
-} from 'react-query';
-import axios from 'axios';
-import Peer from 'simple-peer';
-import { CryptoService } from '../services/CryptoService';
-import { PushNotificationService } from '../services/PushNotificationService';
-import Spinner from '../components/Spinner';
-import { useSocket } from '../contexts/SocketContext'; // Import useSocket from SocketContext
-
-// Interfaces
-interface Room {
-  _id: string;
-  name: string;
-  createdAt: string;
-  createdBy: string;
-  lastMessage?: string;
-  lastMessageAt?: string;
-  publicKey: string;
-}
-
-interface Message {
-  _id: string;
-  roomId: string;
-  userId: string;
-  username: string;
-  content: string;
-  createdAt: string;
-  updatedAt?: string;
-  reactions: { [emoji: string]: string[] };
-  attachments?: Attachment[];
-  isEdited?: boolean;
-  readBy?: string[];
-  parentId?: string;
-  thread?: Message[];
-}
-
-interface Attachment {
-  _id: string;
-  filename: string;
-  url: string;
-  contentType: string;
-}
-
-interface User {
-  _id: string;
-  username: string;
-  email: string;
-  profilePicture?: string;
-  online: boolean;
-  presence: 'online' | 'away' | 'busy' | 'offline';
-  privateKey: string;
-}
-
-interface ApiResponse<T> {
-  results: T[];
-  nextPage: number | null;
-}
+import { Spinner } from '../components/Spinner';
 
 // API setup
 const api = axios.create({
@@ -260,14 +208,33 @@ const DashboardPage: React.FC = () => {
   const { data: session, status } = useSession();
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { socket } = useSocket(); // Use socket from context
+  const { socket, isConnected, error: socketError, reconnect } = useSocket();
 
   const [state, dispatch] = useReducer(reducer, initialState);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const messageListRef = useRef<HTMLDivElement>(null);
   const lastMessageRef = useRef<HTMLDivElement>(null);
   const peerRef = useRef<Peer.Instance | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
+
+  // Handle socket connection errors
+  useEffect(() => {
+    if (socketError) {
+      Swal.fire({
+        title: 'Connection Error',
+        text: 'Failed to connect to chat server. Would you like to retry?',
+        icon: 'error',
+        showCancelButton: true,
+        confirmButtonText: 'Retry',
+        cancelButtonText: 'Cancel'
+      }).then((result) => {
+        if (result.isConfirmed) {
+          reconnect();
+        }
+      });
+    }
+  }, [socketError, reconnect]);
 
   const {
     data: roomsData,
@@ -517,28 +484,29 @@ const DashboardPage: React.FC = () => {
     );
 
     try {
-      let content = state.message;
-      const uploadedAttachments: Omit<Attachment, '_id'>[] = [];
+      let messageContent = state.message;
+      const attachmentsList: Omit<Attachment, '_id'>[] = [];
 
       if (state.audioBlob) {
         const audioUrl = await uploadAudio(state.audioBlob);
-        content = `[Audio Message](${audioUrl})`;
+        messageContent = `[Audio Message](${audioUrl})`;
       }
 
       if (state.attachments.length > 0) {
-        for (const file of state.attachments) {
+        const uploadPromises = state.attachments.map(async (file) => {
           const attachmentUrl = await uploadAttachment(file);
-          uploadedAttachments.push({
+          return {
             filename: file.name,
             url: attachmentUrl,
             contentType: file.type,
-          });
-        }
+          };
+        });
+        attachmentsList.push(...await Promise.all(uploadPromises));
       }
 
       // Encryption
       const encryptedContent = CryptoService.encrypt(
-        content,
+        messageContent,
         state.selectedRoom.publicKey,
         session.user.privateKey
       );
@@ -547,7 +515,7 @@ const DashboardPage: React.FC = () => {
       socket?.emit('sendMessage', {
         roomId: state.selectedRoom._id,
         content: encryptedContent,
-        attachments: uploadedAttachments,
+        attachments: attachmentsList,
       });
 
       // Clear input fields

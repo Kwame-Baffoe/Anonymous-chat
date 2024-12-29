@@ -9,16 +9,21 @@ async function updateRoomKeys() {
     const sql = fs.readFileSync(sqlPath, 'utf8');
     await query(sql);
 
-    // Then update each room with proper NaCl keys
+    // Then update each room with proper keys
     const rooms = await query('SELECT id FROM rooms WHERE public_key = $1', ['PENDING_UPDATE']);
     
     for (const room of rooms.rows) {
-      const keyPair = CryptoService.generateKeyPair();
-      await query(
-        'UPDATE rooms SET public_key = $1 WHERE id = $2',
-        [keyPair.publicKey, room.id]
-      );
-      console.log(`Updated keys for room ${room.id}`);
+      try {
+        const keyPair = await CryptoService.generateKeyPair();
+        await query(
+          'UPDATE rooms SET public_key = $1 WHERE id = $2',
+          [keyPair.publicKey, room.id]
+        );
+        console.log(`Updated keys for room ${room.id}`);
+      } catch (roomError) {
+        console.error(`Failed to update keys for room ${room.id}:`, roomError);
+        // Continue with other rooms even if one fails
+      }
     }
 
     console.log('Successfully updated all room keys');
@@ -27,5 +32,11 @@ async function updateRoomKeys() {
     process.exit(1);
   }
 }
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (error) => {
+  console.error('Unhandled promise rejection:', error);
+  process.exit(1);
+});
 
 updateRoomKeys().then(() => process.exit(0));

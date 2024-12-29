@@ -1,27 +1,53 @@
-// components/ProtectedRoute.tsx
-
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/router';
-import { ReactNode, useEffect } from 'react';
+import { useEffect } from 'react';
+import Spinner from './Spinner';
 
 interface ProtectedRouteProps {
-  children: ReactNode;
+  children: React.ReactNode;
 }
 
-const ProtectedRoute = ({ children }: ProtectedRouteProps) => {
+export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
   const { data: session, status } = useSession();
   const router = useRouter();
 
   useEffect(() => {
-    if (status === 'loading') return; // Do nothing while loading
-    if (!session) router.push('/login'); // Redirect if not authenticated
+    if (status === 'loading') return;
+
+    if (!session) {
+      router.push({
+        pathname: '/login',
+        query: { returnUrl: router.asPath },
+      });
+    }
   }, [session, status, router]);
 
-  if (status === 'loading' || !session) {
-    return <div className="flex justify-center items-center h-screen">Loading...</div>;
+  if (status === 'loading') {
+    return (
+      <div className="h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <Spinner />
+          <p className="mt-4 text-gray-600">Loading your session...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <Spinner />
+          <p className="mt-4 text-gray-600">Redirecting to login...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Add session user to window for debugging purposes in development
+  if (process.env.NODE_ENV === 'development') {
+    (window as any).__session = session;
   }
 
   return <>{children}</>;
 };
-
-export default ProtectedRoute;

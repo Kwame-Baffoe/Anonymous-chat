@@ -1,15 +1,10 @@
-// components/Spinner.tsx
+import React from 'react';
 
-import { ClipLoader } from 'react-spinners';
-
-interface SpinnerProps {
-  size?: number;
-  color?: string;
-}
-
-const Spinner = ({ size = 35, color = '#3B82F6' }: SpinnerProps) => (
-  <div className="flex justify-center items-center">
-    <ClipLoader size={size} color={color} />
+const Spinner: React.FC = () => (
+  <div className="flex justify-center items-center" role="status">
+    <div className="animate-spin rounded-full h-8 w-8 border-4 border-indigo-500 border-t-transparent">
+      <span className="sr-only">Loading...</span>
+    </div>
   </div>
 );
 

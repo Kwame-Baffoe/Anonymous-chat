@@ -12,6 +12,9 @@ export interface Message {
   readBy?: string[];
   parentId?: string;
   thread?: Message[];
+  type?: 'text' | 'system' | 'media';
+  deliveredAt?: string;
+  status?: 'sent' | 'delivered' | 'read';
 }
 
 export interface Attachment {

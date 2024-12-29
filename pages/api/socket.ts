@@ -4,7 +4,8 @@ import { NextApiRequest } from 'next';
 import { Server } from 'socket.io';
 import { NextApiResponseServerIO } from '../../types/next';
 import jwt from 'jsonwebtoken';
-import { Message, User } from '../../interfaces';
+import { Message } from '../../interfaces/Message';
+import { User } from '../../interfaces/User';
 import { query } from '../../lib/postgresql';
 
 export default function handler(req: NextApiRequest, res: NextApiResponseServerIO) {
@@ -66,15 +67,24 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
           attachments,
         };
 
-        // Save message to the database (implement your own database logic)
         try {
-          await saveMessageToDatabase(message);
+          // Save message to the database
+          const savedMessage = await saveMessageToDatabase(message);
+          if (savedMessage) {
+            // Only emit the message if it was successfully saved
+            io.in(roomId).emit('newMessage', {
+              ...message,
+              _id: savedMessage.id.toString() // Use the database-generated ID
+            });
+          }
         } catch (error) {
           console.error('Error saving message to database:', error);
+          // Emit error back to sender
+          socket.emit('messageSendError', {
+            error: 'Failed to send message. Please try again.',
+            originalMessage: message
+          });
         }
-
-        // Emit the new message to all clients in the room, including the sender
-        io.in(roomId).emit('newMessage', message);
       });
 
       // Handle user typing
@@ -194,25 +204,87 @@ function generateUniqueId(): string {
 
 // Save message to the database
 async function saveMessageToDatabase(message: Message) {
-  // Implement your database save logic here
+  try {
+    const result = await query(
+      `INSERT INTO messages (room_id, user_id, content, type, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       RETURNING *`,
+      [message.roomId, message.userId, message.content, 'text']
+    );
+    return result.rows[0];
+  } catch (error) {
+    console.error('Database error saving message:', error);
+    throw error;
+  }
 }
 
 // Update message reaction in the database
-function updateMessageReactionInDatabase(messageId: string, emoji: string, userId: string) {
-  // Implement your database update logic here
+async function updateMessageReactionInDatabase(messageId: string, emoji: string, userId: string) {
+  try {
+    await query(
+      `UPDATE messages 
+       SET reactions = COALESCE(reactions, '{}'::jsonb) || jsonb_build_object($2, jsonb_build_array($3))
+       WHERE id = $1`,
+      [messageId, emoji, userId]
+    );
+  } catch (error) {
+    console.error('Database error updating reaction:', error);
+    throw error;
+  }
 }
 
 // Edit message in the database
 async function editMessageInDatabase(messageId: string, content: string, userId: string) {
-  // Implement your database update logic here
+  try {
+    const result = await query(
+      `UPDATE messages 
+       SET content = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2 AND user_id = $3
+       RETURNING *`,
+      [content, messageId, userId]
+    );
+    
+    if (result.rowCount === 0) {
+      throw new Error('Message not found or user not authorized');
+    }
+    
+    return result.rows[0];
+  } catch (error) {
+    console.error('Database error editing message:', error);
+    throw error;
+  }
 }
 
 // Delete message from the database
 async function deleteMessageFromDatabase(messageId: string, userId: string) {
-  // Implement your database delete logic here
+  try {
+    const result = await query(
+      `DELETE FROM messages 
+       WHERE id = $1 AND user_id = $2
+       RETURNING *`,
+      [messageId, userId]
+    );
+    
+    if (result.rowCount === 0) {
+      throw new Error('Message not found or user not authorized');
+    }
+  } catch (error) {
+    console.error('Database error deleting message:', error);
+    throw error;
+  }
 }
 
 // Update user's presence status
-function updateUserPresence(userId: string, presence: User['presence']) {
-  // Implement your presence update logic here
+async function updateUserPresence(userId: string, presence: User['presence']) {
+  try {
+    await query(
+      `UPDATE users 
+       SET presence = $1, last_active = CURRENT_TIMESTAMP
+       WHERE id = $2`,
+      [presence, userId]
+    );
+  } catch (error) {
+    console.error('Database error updating presence:', error);
+    throw error;
+  }
 }

@@ -134,7 +134,16 @@ async function handleCreateRoom(
 
   try {
     // Generate key pair for the room
-    const keyPair = CryptoService.generateKeyPair();
+    let keyPair;
+    try {
+      keyPair = await CryptoService.generateKeyPair();
+    } catch (keyError) {
+      console.error('Error generating room keys:', keyError);
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Failed to generate room encryption keys' 
+      });
+    }
 
     // Create room and add creator as participant in a transaction
     const newRoom = await query(
