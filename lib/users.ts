@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import { CryptoService } from '../services/CryptoService';
 
 export interface User {
-  id: number;
+  id: string;
   name: string;
   email: string;
   password: string;
@@ -11,6 +11,7 @@ export interface User {
   created_at: Date;
   updated_at: Date;
   privateKey: string;
+  presence?: 'online' | 'away' | 'busy' | 'offline';
 }
 
 export interface CreateUserData {
@@ -47,7 +48,15 @@ export async function getUserByEmail(email: string): Promise<User | null> {
     }
 
     console.log(`Successfully retrieved user with email: ${email}`);
-    return result.rows[0];
+    const dbUser = result.rows[0];
+    if (dbUser) {
+      // Transform database fields to match interface
+      return {
+        ...dbUser,
+        privateKey: dbUser.private_key
+      };
+    }
+    return null;
   } catch (error) {
     console.error('Error in getUserByEmail:', error);
     if (error instanceof Error) {
@@ -63,7 +72,15 @@ export async function getUserById(id: string): Promise<User | null> {
       'SELECT * FROM users WHERE id = $1',
       [id]
     );
-    return result.rows[0] || null;
+    const dbUser = result.rows[0];
+    if (dbUser) {
+      // Transform database fields to match interface
+      return {
+        ...dbUser,
+        privateKey: dbUser.private_key
+      };
+    }
+    return null;
   } catch (error) {
     console.error('Error in getUserById:', error);
     throw new Error('Failed to fetch user by ID');
@@ -83,7 +100,7 @@ export async function createUser(userData: CreateUserData): Promise<User> {
     console.log('Password hashed successfully for new user');
 
     // Generate encryption keys for the user
-    const keyPair = CryptoService.generateKeyPair();
+    const keyPair = await CryptoService.generateKeyPair();
 
     const result = await query(
       `INSERT INTO users (name, email, password, image, private_key, created_at, updated_at)
@@ -92,7 +109,15 @@ export async function createUser(userData: CreateUserData): Promise<User> {
       [userData.name, userData.email, hashedPassword, userData.image || null, keyPair.privateKey]
     );
 
-    return result.rows[0];
+    const dbUser = result.rows[0];
+    if (dbUser) {
+      // Transform database fields to match interface
+      return {
+        ...dbUser,
+        privateKey: dbUser.private_key
+      };
+    }
+    throw new Error('Failed to create user');
   } catch (error) {
     console.error('Error in createUser:', error);
     throw error;
@@ -144,13 +169,17 @@ export async function updateUser(id: string, updateData: UpdateUserData): Promis
       values
     );
 
-    const updatedUser = result.rows[0] || null;
-    if (updatedUser) {
+    const dbUser = result.rows[0];
+    if (dbUser) {
       console.log(`User ${id} updated successfully`);
-    } else {
-      console.log(`No user found with id ${id} for update`);
+      // Transform database fields to match interface
+      return {
+        ...dbUser,
+        privateKey: dbUser.private_key
+      };
     }
-    return updatedUser;
+    console.log(`No user found with id ${id} for update`);
+    return null;
   } catch (error) {
     console.error('Error in updateUser:', error);
     throw new Error('Failed to update user');
@@ -193,20 +222,6 @@ export async function validateUserCredentials(email: string, password: string): 
     return null;
   }
 
-  console.log('Starting password validation...');
-  console.log('Stored hash:', user.password);
-  console.log('Password to validate length:', password.length);
-  console.log('Hash validation:', {
-    isHash: user.password.startsWith('$2'),
-    hashLength: user.password.length,
-    expectedLength: 60 // bcrypt hashes are always 60 characters
-  });
-  
-  if (!user.password.startsWith('$2') || user.password.length !== 60) {
-    console.error('Invalid password hash format');
-    return null;
-  }
-
   try {
     console.log('Attempting bcrypt compare...');
     const isValid = await bcrypt.compare(password, user.password);
@@ -214,16 +229,21 @@ export async function validateUserCredentials(email: string, password: string): 
     
     if (!isValid) {
       console.error(`Authentication failed: Invalid password for user: ${email}`);
-      console.log('Password validation details:', {
-        providedPasswordLength: password.length,
-        storedHashValid: user.password.startsWith('$2') && user.password.length === 60,
-        timestamp: new Date().toISOString()
-      });
       return null;
     }
     
     console.log('Password validated successfully');
-    return user;
+    // Return user with the exact fields expected by NextAuth
+    return {
+      id: user.id.toString(), // Convert to string as expected by NextAuth
+      email: user.email,
+      name: user.name,
+      privateKey: user.privateKey,
+      password: user.password,
+      created_at: user.created_at,
+      updated_at: user.updated_at,
+      presence: 'online' as const
+    };
   } catch (error) {
     console.error('Error in password validation:', error);
     return null;

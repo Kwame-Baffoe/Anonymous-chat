@@ -4,20 +4,14 @@ import { validateUserCredentials } from '../../../lib/users';
 import { query } from '../../../lib/postgresql';
 import { rateLimit } from '../../../lib/rate-limit';
 
-// Extend Session type to include custom properties
-declare module "next-auth" {
-  interface Session {
-    user: User;
-    iat?: number;
-  }
-
-  interface JWT {
-    id?: string;
-    email?: string;
-    name?: string;
-    privateKey?: string;
-    iat?: number;
-  }
+// Define JWT type to match SessionUser fields
+interface JWT {
+  id: string;
+  email: string;
+  name: string;
+  privateKey: string;
+  presence: 'online' | 'away' | 'busy' | 'offline';
+  iat?: number;
 }
 
 // Create auth_logs table
@@ -98,7 +92,8 @@ export const authOptions: NextAuthOptions = {
             id: user.id.toString(),
             email: user.email,
             name: user.name,
-            privateKey: user.privateKey
+            privateKey: user.privateKey,
+            presence: 'online' as const
           };
           console.log('Returning user data:', userData);
           
@@ -138,25 +133,57 @@ export const authOptions: NextAuthOptions = {
     },
     async jwt({ token, user, account, profile }) {
       console.log('JWT Callback - Input:', { token, user, account, profile });
-      if (user) {
-        token.id = user.id;
-        token.email = user.email;
-        token.name = user.name;
-        token.privateKey = user.privateKey;
-        token.iat = Math.floor(Date.now() / 1000);
+      if (user && typeof user === 'object') {
+        // Ensure all required fields are present and of correct type
+        if (
+          'id' in user && typeof user.id === 'string' &&
+          'email' in user && typeof user.email === 'string' &&
+          'name' in user && typeof user.name === 'string' &&
+          'privateKey' in user && typeof user.privateKey === 'string'
+        ) {
+          token.id = user.id;
+          token.email = user.email;
+          token.name = user.name;
+          token.privateKey = user.privateKey;
+          token.presence = (user.presence as 'online' | 'away' | 'busy' | 'offline') || 'online';
+          token.iat = Math.floor(Date.now() / 1000);
+        } else {
+          console.error('Missing or invalid user fields in JWT callback:', user);
+          throw new Error('Invalid user data');
+        }
       }
       console.log('JWT Callback - Output token:', token);
       return token;
     },
     async session({ session, token }) {
       console.log('Session Callback - Input:', { session, token });
-      if (session.user) {
-        session.user.id = token.id as string;
-        session.user.email = token.email as string;
-        session.user.name = token.name as string;
-        session.user.privateKey = token.privateKey as string;
-        session.iat = token.iat as number | undefined;
+      
+      // Type guard to ensure token has required fields
+      if (
+        typeof token.id === 'string' &&
+        typeof token.email === 'string' &&
+        typeof token.name === 'string' &&
+        typeof token.privateKey === 'string' &&
+        token.presence &&
+        (
+          token.presence === 'online' ||
+          token.presence === 'away' ||
+          token.presence === 'busy' ||
+          token.presence === 'offline'
+        )
+      ) {
+        if (session.user) {
+          session.user.id = token.id;
+          session.user.email = token.email;
+          session.user.name = token.name;
+          session.user.privateKey = token.privateKey;
+          session.user.presence = token.presence;
+        }
+      } else {
+        console.error('Invalid token data in session callback:', token);
+        throw new Error('Invalid token data');
       }
+      
       console.log('Session Callback - Output session:', session);
       return session;
     },

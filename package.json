@@ -2,6 +2,7 @@
   "dependencies": {
     "@emoji-mart/data": "^1.2.1",
     "@tanstack/react-query": "^5.62.11",
+    "@tanstack/react-query-devtools": "^5.62.11",
     "@types/dompurify": "^3.0.5",
     "@types/formidable": "^3.4.5",
     "@types/pg": "^8.11.10",
@@ -30,7 +31,6 @@
     "react-feather": "^2.0.10",
     "react-infinite-scroll-component": "^6.1.0",
     "react-loader-spinner": "^6.1.6",
-    "react-query": "^3.39.3",
     "react-spinners": "^0.14.1",
     "sanitize-html": "^1.27.5",
     "sass": "^1.79.4",
@@ -38,6 +38,7 @@
     "socket.io": "^4.8.0",
     "socket.io-client": "^4.8.0",
     "sweetalert2": "^11.14.1",
+    "swr": "^2.3.0",
     "tweetnacl": "^1.0.3",
     "tweetnacl-util": "^0.13.5",
     "uuidv4": "^6.2.13",

@@ -61,13 +61,13 @@ export const OnlineUsersList: React.FC<OnlineUsersListProps> = ({
                   {user.profilePicture ? (
                     <img
                       src={user.profilePicture}
-                      alt={user.username}
+                      alt={user?.username || 'User profile picture'}
                       className="w-8 h-8 rounded-full"
                     />
                   ) : (
                     <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center">
                       <span className="text-indigo-600 font-medium">
-                        {user.username.charAt(0).toUpperCase()}
+                        {user?.username ? user.username.charAt(0).toUpperCase() : '?'}
                       </span>
                     </div>
                   )}
@@ -80,7 +80,7 @@ export const OnlineUsersList: React.FC<OnlineUsersListProps> = ({
                 </div>
                 <div className="ml-3 flex-1 min-w-0">
                   <p className="text-sm font-medium text-gray-900 truncate">
-                    {user.username}
+                    {user?.username || 'Unknown User'}
                   </p>
                   <p className="text-xs text-gray-500 truncate">
                     {getPresenceLabel(user.presence)}
@@ -89,7 +89,7 @@ export const OnlineUsersList: React.FC<OnlineUsersListProps> = ({
                 <div className="ml-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
                   <button
                     className="text-gray-400 hover:text-gray-600"
-                    aria-label={`View ${user.username}'s profile`}
+                    aria-label={`View ${user?.username || 'Unknown User'}'s profile`}
                   >
                     <svg
                       className="h-4 w-4"

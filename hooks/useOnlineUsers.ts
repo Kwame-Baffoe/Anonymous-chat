@@ -1,20 +1,27 @@
-import { useQuery } from '@tanstack/react-query';
-import axios from 'axios';
+import useSWR from 'swr';
 import { User } from '../interfaces/User';
 
-const api = axios.create({
-  baseURL: '/api',
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
+const fetcher = async (url: string) => {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('Failed to fetch online users');
+  return res.json();
+};
 
 export const useOnlineUsers = () => {
-  return useQuery({
-    queryKey: ['onlineUsers'],
-    queryFn: async () => {
-      const { data } = await api.get<User[]>('/users/online');
-      return data;
-    },
-  });
+  const { data, error, isLoading, isValidating } = useSWR<User[]>(
+    '/api/users/online',
+    fetcher,
+    {
+      refreshInterval: 30000, // Refresh every 30 seconds
+      revalidateOnFocus: true,
+      revalidateOnReconnect: true
+    }
+  );
+
+  return {
+    data,
+    error,
+    isLoading,
+    isValidating
+  };
 };

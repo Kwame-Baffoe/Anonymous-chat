@@ -14,7 +14,15 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
 
     const io = new Server(res.socket.server, {
       path: '/api/socketio',
-      addTrailingSlash: false, // Ensure the path is correct
+      addTrailingSlash: false,
+      transports: ['websocket', 'polling'],
+      cors: {
+        origin: process.env.NEXT_PUBLIC_SOCKET_URL || '*',
+        methods: ['GET', 'POST'],
+        credentials: true
+      },
+      pingTimeout: 60000,
+      pingInterval: 25000,
     });
 
     // Middleware for authentication
@@ -23,7 +31,11 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
       if (token) {
         try {
           // Verify JWT token (you need to provide the secret or public key)
-          const user = jwt.verify(token, process.env.JWT_SECRET as string) as User;
+          if (!process.env.JWT_SECRET) {
+            console.error('JWT_SECRET is not configured');
+            return next(new Error('Server configuration error'));
+          }
+          const user = jwt.verify(token, process.env.JWT_SECRET) as User;
           socket.data.user = user; // Attach user data to the socket
           next();
         } catch (err) {
@@ -37,6 +49,11 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
 
     io.on('connection', (socket) => {
       const user = socket.data.user as User;
+      if (!user?._id || !user?.username) {
+        console.error('Invalid user data:', user);
+        socket.disconnect();
+        return;
+      }
       console.log(`User connected: ${user.username} (${socket.id})`);
 
       // Handle joining a room
@@ -59,8 +76,8 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
         const message: Message = {
           _id: generateUniqueId(), // Implement a function to generate unique IDs
           roomId,
-          userId: user._id,
-          username: user.username,
+          userId: user._id as string,
+          username: user.username as string,
           content,
           createdAt: new Date().toISOString(),
           reactions: {},
@@ -111,7 +128,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
 
         // Update message reactions in the database (implement your own logic)
         try {
-          updateMessageReactionInDatabase(messageId, emoji, user._id);
+          updateMessageReactionInDatabase(messageId, emoji, user._id as string);
         } catch (error) {
           console.error('Error updating message reaction:', error);
         }
@@ -130,7 +147,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
 
         // Update message content in the database (implement your own logic)
         try {
-          await editMessageInDatabase(messageId, content, user._id);
+          await editMessageInDatabase(messageId, content, user._id as string);
         } catch (error) {
           console.error('Error editing message:', error);
           return;
@@ -150,7 +167,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
 
         // Delete message from the database (implement your own logic)
         try {
-          await deleteMessageFromDatabase(messageId, user._id);
+          await deleteMessageFromDatabase(messageId, user._id as string);
         } catch (error) {
           console.error('Error deleting message:', error);
           return;
@@ -164,7 +181,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
       socket.on('updatePresence', (data: { presence: User['presence'] }) => {
         const { presence } = data;
         // Update user's presence in the database or in-memory store
-        updateUserPresence(user._id, presence);
+        updateUserPresence(user._id as string, presence);
 
         // Notify other users about the presence change
         socket.broadcast.emit('userPresenceChanged', {
@@ -177,7 +194,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
       socket.on('disconnect', () => {
         console.log(`User disconnected: ${user.username} (${socket.id})`);
         // Update user's presence to offline
-        updateUserPresence(user._id, 'offline');
+        updateUserPresence(user._id as string, 'offline');
 
         // Notify other users
         socket.broadcast.emit('userPresenceChanged', {
@@ -189,7 +206,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
 
     res.socket.server.io = io;
   } else {
-    console.log('Socket.io server already initialized');
+    console.log('Socket.io server already running');
   }
   res.end();
 }

@@ -4,10 +4,13 @@ import { User } from '../interfaces/User';
 import { ErrorBoundary } from 'react-error-boundary';
 import Spinner from './Spinner';
 
+import { RetryConnection } from './RetryConnection';
+
 interface LayoutProps {
   children: ReactNode;
   user: User;
   isConnected: boolean;
+  socketError: Error | null;
   isLoading?: boolean;
   onUserProfileClick: () => void;
   onPresenceChange: (presence: User['presence']) => void;
@@ -17,6 +20,7 @@ export const Layout: React.FC<LayoutProps> = ({
   children,
   user,
   isConnected,
+  socketError,
   isLoading = false,
   onUserProfileClick,
   onPresenceChange,
@@ -53,7 +57,11 @@ export const Layout: React.FC<LayoutProps> = ({
           onPresenceChange={onPresenceChange}
         />
         
-        {isLoading ? (
+        {socketError ? (
+          <div className="flex-1 flex items-center justify-center">
+            <RetryConnection />
+          </div>
+        ) : isLoading ? (
           <div className="flex-1 flex items-center justify-center">
             <Spinner />
           </div>

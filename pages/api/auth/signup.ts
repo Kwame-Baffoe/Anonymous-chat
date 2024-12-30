@@ -6,7 +6,7 @@ interface SignupResponse {
   success: boolean;
   message: string;
   user?: {
-    id: number;
+    id: string;
     name: string;
     email: string;
   };

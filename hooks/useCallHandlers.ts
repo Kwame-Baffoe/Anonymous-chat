@@ -6,11 +6,15 @@ import { Logger } from '../utils/Logger';
 interface UseCallHandlersProps {
   socket: Socket | null;
   onCallStateChange: (isInCall: boolean) => void;
+  onLocalStream: (stream: MediaStream | null) => void;
+  onRemoteStream: (stream: MediaStream | null) => void;
 }
 
 export const useCallHandlers = ({
   socket,
   onCallStateChange,
+  onLocalStream,
+  onRemoteStream,
 }: UseCallHandlersProps) => {
   const peerRef = useRef<Peer.Instance | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -27,6 +31,7 @@ export const useCallHandlers = ({
           video: type === 'video',
         });
         streamRef.current = stream;
+        onLocalStream(stream);
 
         peerRef.current = new Peer({
           initiator: true,
@@ -40,6 +45,10 @@ export const useCallHandlers = ({
             type,
             signalData,
           });
+        });
+
+        peerRef.current.on('stream', (remoteStream: MediaStream) => {
+          onRemoteStream(remoteStream);
         });
 
         onCallStateChange(true);
@@ -64,6 +73,7 @@ export const useCallHandlers = ({
           video: data.type === 'video',
         });
         streamRef.current = stream;
+        onLocalStream(stream);
 
         peerRef.current = new Peer({
           initiator: false,
@@ -76,6 +86,10 @@ export const useCallHandlers = ({
             to: data.from,
             signalData,
           });
+        });
+
+        peerRef.current.on('stream', (remoteStream: MediaStream) => {
+          onRemoteStream(remoteStream);
         });
 
         peerRef.current.signal(data.signal);
@@ -108,10 +122,12 @@ export const useCallHandlers = ({
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
+      onLocalStream(null);
+      onRemoteStream(null);
     }
 
     onCallStateChange(false);
-  }, [onCallStateChange]);
+  }, [onCallStateChange, onLocalStream, onRemoteStream]);
 
   const handleIncomingSignal = useCallback((signal: any) => {
     if (peerRef.current) {

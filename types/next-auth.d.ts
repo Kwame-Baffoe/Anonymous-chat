@@ -1,15 +1,11 @@
-import NextAuth from "next-auth";
+import 'next-auth';
+import { SessionUser } from '../interfaces/User';
 
-declare module "next-auth" {
-  interface User {
-    id: string;
-    email: string;
-    name: string;
-    privateKey: string;
-    presence?: 'online' | 'away' | 'busy' | 'offline';
-  }
-
+declare module 'next-auth' {
   interface Session {
-    user: User;
+    user: SessionUser;
+    accessToken: string;
   }
+
+  interface User extends SessionUser {}
 }

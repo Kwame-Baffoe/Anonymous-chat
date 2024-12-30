@@ -1,4 +1,6 @@
-const ALGORITHM = 'AES-GCM';
+import crypto from 'crypto';
+
+const ALGORITHM = 'aes-256-gcm';  // Changed to match Node's cipher names
 const KEY_LENGTH = 256;
 const IV_LENGTH = 12;
 const SALT_LENGTH = 16;
@@ -25,23 +27,14 @@ const uint8ArrayToBase64 = (array: Uint8Array): string => {
   if (!array || array.length === 0) {
     throw new ValidationError('Invalid array input');
   }
-  const chunks: string[] = [];
-  for (let i = 0; i < array.length; i++) {
-    chunks.push(String.fromCharCode(array[i]));
-  }
-  return btoa(chunks.join(''));
+  return Buffer.from(array).toString('base64');
 };
 
 const base64ToUint8Array = (base64: string): Uint8Array => {
   if (!base64 || !KEY_FORMAT_REGEX.test(base64)) {
     throw new ValidationError('Invalid base64 input');
   }
-  const binaryString = atob(base64);
-  const array = new Uint8Array(binaryString.length);
-  for (let i = 0; i < binaryString.length; i++) {
-    array[i] = binaryString.charCodeAt(i);
-  }
-  return array;
+  return new Uint8Array(Buffer.from(base64, 'base64'));
 };
 
 // Key validation functions
@@ -66,26 +59,22 @@ const validateMessage = (message: string): void => {
 export const CryptoService = {
   async generateKeyPair(): Promise<{ publicKey: string; privateKey: string }> {
     try {
-      if (!window.crypto.subtle) {
-        throw new CryptoError('Crypto API not available');
-      }
-      // Generate a random key using ECDH for better security
-      const keyPair = await window.crypto.subtle.generateKey(
-        {
-          name: 'ECDH',
-          namedCurve: 'P-256'
+      // Generate ECDH key pair using Node's crypto module
+      const keyPair = crypto.generateKeyPairSync('ec', {
+        namedCurve: 'P-256',
+        publicKeyEncoding: {
+          type: 'spki',
+          format: 'der'
         },
-        true,
-        ['deriveKey']
-      );
-
-      // Export the public and private keys
-      const publicKeyExport = await window.crypto.subtle.exportKey('raw', keyPair.publicKey);
-      const privateKeyExport = await window.crypto.subtle.exportKey('pkcs8', keyPair.privateKey);
+        privateKeyEncoding: {
+          type: 'pkcs8',
+          format: 'der'
+        }
+      });
 
       return {
-        publicKey: uint8ArrayToBase64(new Uint8Array(publicKeyExport)),
-        privateKey: uint8ArrayToBase64(new Uint8Array(privateKeyExport))
+        publicKey: uint8ArrayToBase64(new Uint8Array(keyPair.publicKey)),
+        privateKey: uint8ArrayToBase64(new Uint8Array(keyPair.privateKey))
       };
     } catch (error) {
       throw new Error(`Key generation failed: ${(error as Error).message}`);
@@ -97,94 +86,62 @@ export const CryptoService = {
       // Validate inputs
       validateMessage(message);
       validateKey(recipientPublicKey, 'public');
+      validateKey(privateKey, 'private');
 
-      if (!window.crypto.subtle) {
-        throw new CryptoError('Crypto API not available');
-      }
-      // Generate a random IV and salt
-      const iv = window.crypto.getRandomValues(new Uint8Array(IV_LENGTH));
-      const salt = window.crypto.getRandomValues(new Uint8Array(SALT_LENGTH));
+      // Generate random IV and salt
+      const iv = crypto.randomBytes(IV_LENGTH);
+      const salt = crypto.randomBytes(SALT_LENGTH);
 
       // Import recipient's public key
       const publicKeyData = base64ToUint8Array(recipientPublicKey);
-      const publicKey = await window.crypto.subtle.importKey(
-        'raw',
-        publicKeyData,
-        {
-          name: 'ECDH',
-          namedCurve: 'P-256'
-        },
-        true,
-        []
-      );
+      const publicKey = crypto.createPublicKey({
+        key: Buffer.from(publicKeyData),
+        type: 'spki',
+        format: 'der'
+      });
 
-      // Generate an ephemeral key pair
-      const ephemeralKeyPair = await window.crypto.subtle.generateKey(
-        {
-          name: 'ECDH',
-          namedCurve: 'P-256'
+      // Generate ephemeral key pair
+      const ephemeralKeyPair = crypto.generateKeyPairSync('ec', {
+        namedCurve: 'P-256',
+        publicKeyEncoding: {
+          type: 'spki',
+          format: 'der'
         },
-        true,
-        ['deriveKey']
-      );
+        privateKeyEncoding: {
+          type: 'pkcs8',
+          format: 'der'
+        }
+      });
 
-      // Derive a shared secret
-      const derivedKey = await window.crypto.subtle.deriveKey(
-        {
-          name: 'PBKDF2',
-          salt: salt,
-          iterations: PBKDF2_ITERATIONS,
-          hash: 'SHA-256'
-        },
+      // Derive shared secret using PBKDF2
+      const sharedSecret = crypto.pbkdf2Sync(
         ephemeralKeyPair.privateKey,
-        {
-          name: ALGORITHM,
-          length: KEY_LENGTH
-        },
-        false,
-        ['encrypt']
+        salt,
+        PBKDF2_ITERATIONS,
+        KEY_LENGTH / 8,
+        'sha256'
       );
 
-      // Encode the message
-      const encodedMessage = new TextEncoder().encode(message);
+      // Create cipher and encrypt
+      const cipher = crypto.createCipheriv(ALGORITHM, sharedSecret, iv);
+      cipher.setAAD(salt);
 
-      // Encrypt the message
-      // Validate inputs
-      validateMessage(message);
-      validateKey(recipientPublicKey, 'public');
-      validateKey(privateKey, 'private');
-
-      if (!window.crypto.subtle) {
-        throw new CryptoError('Crypto API not available');
-      }
-
-      const encryptedContent = await window.crypto.subtle.encrypt(
-        {
-          name: ALGORITHM,
-          iv: iv,
-          additionalData: salt
-        },
-        derivedKey,
-        encodedMessage
-      );
-
-      // Export ephemeral public key
-      const ephemeralPublicKey = await window.crypto.subtle.exportKey('raw', ephemeralKeyPair.publicKey);
+      const encodedMessage = Buffer.from(message, 'utf8');
+      const encrypted = Buffer.concat([
+        cipher.update(encodedMessage),
+        cipher.final(),
+        cipher.getAuthTag()
+      ]);
 
       // Combine IV, salt, ephemeral public key, and encrypted content
-      const resultArray = new Uint8Array(
-        IV_LENGTH + SALT_LENGTH + ephemeralPublicKey.byteLength + encryptedContent.byteLength
-      );
-      resultArray.set(iv, 0);
-      resultArray.set(salt, IV_LENGTH);
-      resultArray.set(new Uint8Array(ephemeralPublicKey), IV_LENGTH + SALT_LENGTH);
-      resultArray.set(
-        new Uint8Array(encryptedContent),
-        IV_LENGTH + SALT_LENGTH + ephemeralPublicKey.byteLength
-      );
+      const resultArray = Buffer.concat([
+        iv,
+        salt,
+        Buffer.from(ephemeralKeyPair.publicKey),
+        encrypted
+      ]);
 
-      // Convert to base64
-      return uint8ArrayToBase64(resultArray);
+      return uint8ArrayToBase64(new Uint8Array(resultArray));
     } catch (error) {
       throw new Error(`Encryption failed: ${(error as Error).message}`);
     }
@@ -193,81 +150,59 @@ export const CryptoService = {
   async decrypt(encryptedMessage: string, publicKey: string, privateKeyStr: string): Promise<string> {
     try {
       // Validate inputs
-      validateKey(encryptedMessage, 'public'); // Encrypted message is in base64
+      validateKey(encryptedMessage, 'public');
       validateKey(publicKey, 'public');
       validateKey(privateKeyStr, 'private');
 
-      if (!window.crypto.subtle) {
-        throw new CryptoError('Crypto API not available');
-      }
-
       // Decode the base64 message
       const encryptedArray = base64ToUint8Array(encryptedMessage);
+      const encryptedBuffer = Buffer.from(encryptedArray);
 
-      // Extract IV, salt, ephemeral public key, and encrypted content
-      const iv = encryptedArray.slice(0, IV_LENGTH);
-      const salt = encryptedArray.slice(IV_LENGTH, IV_LENGTH + SALT_LENGTH);
-      const ephemeralPublicKeyData = encryptedArray.slice(
+      // Extract components
+      const iv = encryptedBuffer.slice(0, IV_LENGTH);
+      const salt = encryptedBuffer.slice(IV_LENGTH, IV_LENGTH + SALT_LENGTH);
+      const ephemeralPublicKeyData = encryptedBuffer.slice(
         IV_LENGTH + SALT_LENGTH,
-        IV_LENGTH + SALT_LENGTH + 65
-      ); // 65 bytes for uncompressed P-256 public key
-      const content = encryptedArray.slice(IV_LENGTH + SALT_LENGTH + 65);
+        IV_LENGTH + SALT_LENGTH + 91 // DER encoded P-256 public key length
+      );
+      const encrypted = encryptedBuffer.slice(IV_LENGTH + SALT_LENGTH + 91);
+      const authTag = encrypted.slice(-16);
+      const content = encrypted.slice(0, -16);
 
-      // Import recipient's private key
-      const privateKeyData = base64ToUint8Array(privateKeyStr);
-      const importedPrivateKey = await window.crypto.subtle.importKey(
-        'pkcs8',
-        privateKeyData,
-        {
-          name: 'ECDH',
-          namedCurve: 'P-256'
-        },
-        true,
-        ['deriveKey']
+      // Import keys
+      const privateKey = crypto.createPrivateKey({
+        key: Buffer.from(base64ToUint8Array(privateKeyStr)),
+        type: 'pkcs8',
+        format: 'der'
+      });
+
+      const ephemeralPublicKey = crypto.createPublicKey({
+        key: ephemeralPublicKeyData,
+        type: 'spki',
+        format: 'der'
+      });
+
+      // Derive shared secret
+      const sharedSecret = crypto.pbkdf2Sync(
+        privateKey.export({ type: 'pkcs8', format: 'der' }),
+        salt,
+        PBKDF2_ITERATIONS,
+        KEY_LENGTH / 8,
+        'sha256'
       );
 
-      // Import ephemeral public key
-      const importedEphemeralPublicKey = await window.crypto.subtle.importKey(
-        'raw',
-        ephemeralPublicKeyData,
-        {
-          name: 'ECDH',
-          namedCurve: 'P-256'
-        },
-        true,
-        []
-      );
+      // Create decipher
+      const decipher = crypto.createDecipheriv(ALGORITHM, sharedSecret, iv);
+      decipher.setAAD(salt);
+      decipher.setAuthTag(authTag);
 
-      // Derive the shared secret
-      const derivedKey = await window.crypto.subtle.deriveKey(
-        {
-          name: 'PBKDF2',
-          salt: salt,
-          iterations: PBKDF2_ITERATIONS,
-          hash: 'SHA-256'
-        },
-        importedPrivateKey,
-        {
-          name: ALGORITHM,
-          length: KEY_LENGTH
-        },
-        false,
-        ['decrypt']
-      );
+      // Decrypt
+      const decrypted = Buffer.concat([
+        decipher.update(content),
+        decipher.final()
+      ]);
 
-      // Decrypt the message
-      const decryptedContent = await window.crypto.subtle.decrypt(
-        {
-          name: ALGORITHM,
-          iv: iv,
-          additionalData: salt
-        },
-        derivedKey,
-        content
-      );
-
-      // Decode the decrypted content
-      return new TextDecoder().decode(decryptedContent);
+      return decrypted.toString('utf8');
     } catch (error) {
       if (error instanceof ValidationError || error instanceof CryptoError) {
         throw error;
