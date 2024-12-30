@@ -10,8 +10,8 @@ export const useSocket = () => {
   const { data: session } = useSession();
 
   const connect = useCallback(() => {
-    if (!session?.accessToken) {
-      setError(new Error('No access token available'));
+    if (!session?.user) {
+      setError(new Error('No user session available'));
       return;
     }
 
@@ -19,19 +19,28 @@ export const useSocket = () => {
     setError(null);
 
     try {
-      // Default to window.location.origin if NEXT_PUBLIC_SOCKET_URL is not set
-      const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || window.location.origin;
-      const newSocket = io(socketUrl, {
-        path: '/api/socketio',
-        transports: ['websocket', 'polling'], // Allow fallback to polling
+      const newSocket = io(window.location.origin, {
+        path: '/api/socket',
+        transports: ['polling', 'websocket'], // Try polling first
         auth: {
-          token: session.accessToken,
+          token: session.user.id,
         },
         autoConnect: true,
         reconnection: true,
-        reconnectionAttempts: 10, // Increase retry attempts
-        reconnectionDelay: 2000, // Increase delay between retries
-        timeout: 10000, // Increase connection timeout
+        timeout: 60000, // Match server timeout
+        reconnectionAttempts: 5, // Increase retry attempts
+        reconnectionDelay: 5000, // Start with longer delay
+        reconnectionDelayMax: 30000, // Allow for longer max delay
+        forceNew: true,
+        upgrade: true,
+        rememberUpgrade: true,
+        transportOptions: {
+          polling: {
+            extraHeaders: {
+              'Authorization': `Bearer ${session.user.id}`
+            }
+          }
+        }
       });
 
       const setupSocketListeners = (socket: Socket) => {
@@ -44,12 +53,7 @@ export const useSocket = () => {
         socket.on('disconnect', () => {
           setIsConnected(false);
           Logger.warn('Socket disconnected');
-          // Attempt to reconnect after disconnect
-          setTimeout(() => {
-            if (!socket.connected) {
-              socket.connect();
-            }
-          }, 5000);
+          Logger.warn('Socket disconnected - automatic reconnection will be attempted');
         });
 
         socket.on('connect_error', (err) => {
@@ -69,7 +73,6 @@ export const useSocket = () => {
 
       return () => {
         if (newSocket) {
-          // Remove all listeners before closing
           newSocket.removeAllListeners();
           newSocket.close();
         }
@@ -78,14 +81,14 @@ export const useSocket = () => {
       setError(err as Error);
       Logger.error('Socket initialization error:', err);
     }
-  }, [session?.accessToken]);
+  }, [session?.user]);
 
   useEffect(() => {
     const cleanup = connect();
     return () => {
       cleanup?.();
     };
-  }, [connect, session?.accessToken]);
+  }, [connect]);
 
   const reconnect = useCallback(() => {
     Logger.info('Attempting to reconnect socket...');

@@ -13,30 +13,40 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
     console.log('Initializing Socket.io server...');
 
     const io = new Server(res.socket.server, {
-      path: '/api/socketio',
+      path: '/api/socket',
       addTrailingSlash: false,
-      transports: ['websocket', 'polling'],
+      transports: ['polling', 'websocket'],
       cors: {
-        origin: process.env.NEXT_PUBLIC_SOCKET_URL || '*',
+        origin: '*',
         methods: ['GET', 'POST'],
-        credentials: true
+        credentials: true,
+        allowedHeaders: ['Authorization']
       },
       pingTimeout: 60000,
       pingInterval: 25000,
+      upgradeTimeout: 30000,
+      allowUpgrades: true,
+      perMessageDeflate: true,
+      httpCompression: true,
     });
 
     // Middleware for authentication
-    io.use((socket, next) => {
+    io.use(async (socket, next) => {
       const token = socket.handshake.auth.token;
       if (token) {
         try {
-          // Verify JWT token (you need to provide the secret or public key)
-          if (!process.env.JWT_SECRET) {
-            console.error('JWT_SECRET is not configured');
-            return next(new Error('Server configuration error'));
+          // Get user from database using the user ID token
+          const result = await query(
+            'SELECT * FROM users WHERE id = $1',
+            [token]
+          );
+          
+          if (!result.rows[0]) {
+            return next(new Error('User not found'));
           }
-          const user = jwt.verify(token, process.env.JWT_SECRET) as User;
-          socket.data.user = user; // Attach user data to the socket
+          
+          const user = result.rows[0];
+          socket.data.user = user;
           next();
         } catch (err) {
           console.error('Token verification error:', err);
@@ -48,24 +58,24 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
     });
 
     io.on('connection', (socket) => {
-      const user = socket.data.user as User;
-      if (!user?._id || !user?.username) {
+      const user = socket.data.user;
+      if (!user?.id || !user?.email) {
         console.error('Invalid user data:', user);
         socket.disconnect();
         return;
       }
-      console.log(`User connected: ${user.username} (${socket.id})`);
+      console.log(`User connected: ${user.email} (${socket.id})`);
 
       // Handle joining a room
       socket.on('joinRoom', (roomId: string) => {
         socket.join(roomId);
-        console.log(`User ${user.username} joined room ${roomId}`);
+        console.log(`User ${user.email} joined room ${roomId}`);
       });
 
       // Handle leaving a room
       socket.on('leaveRoom', (roomId: string) => {
         socket.leave(roomId);
-        console.log(`User ${user.username} left room ${roomId}`);
+        console.log(`User ${user.email} left room ${roomId}`);
       });
 
       // Handle sending a message
@@ -76,8 +86,8 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
         const message: Message = {
           _id: generateUniqueId(), // Implement a function to generate unique IDs
           roomId,
-          userId: user._id as string,
-          username: user.username as string,
+          userId: user.id.toString(),
+          username: user.username || user.email,
           content,
           createdAt: new Date().toISOString(),
           reactions: {},
@@ -108,8 +118,8 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
       socket.on('userTyping', (data: { roomId: string }) => {
         const { roomId } = data;
         socket.to(roomId).emit('userTyping', {
-          userId: user._id,
-          username: user.username,
+          userId: user.id.toString(),
+          username: user.username || user.email,
         });
       });
 
@@ -117,8 +127,8 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
       socket.on('userStoppedTyping', (data: { roomId: string }) => {
         const { roomId } = data;
         socket.to(roomId).emit('userStoppedTyping', {
-          userId: user._id,
-          username: user.username,
+          userId: user.id.toString(),
+          username: user.username || user.email,
         });
       });
 
@@ -128,7 +138,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
 
         // Update message reactions in the database (implement your own logic)
         try {
-          updateMessageReactionInDatabase(messageId, emoji, user._id as string);
+          updateMessageReactionInDatabase(messageId, emoji, user.id.toString());
         } catch (error) {
           console.error('Error updating message reaction:', error);
         }
@@ -137,7 +147,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
         io.in(roomId).emit('messageReaction', {
           messageId,
           emoji,
-          userId: user._id,
+          userId: user.id.toString(),
         });
       });
 
@@ -147,7 +157,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
 
         // Update message content in the database (implement your own logic)
         try {
-          await editMessageInDatabase(messageId, content, user._id as string);
+          await editMessageInDatabase(messageId, content, user.id.toString());
         } catch (error) {
           console.error('Error editing message:', error);
           return;
@@ -167,7 +177,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
 
         // Delete message from the database (implement your own logic)
         try {
-          await deleteMessageFromDatabase(messageId, user._id as string);
+          await deleteMessageFromDatabase(messageId, user.id.toString());
         } catch (error) {
           console.error('Error deleting message:', error);
           return;
@@ -181,24 +191,24 @@ export default function handler(req: NextApiRequest, res: NextApiResponseServerI
       socket.on('updatePresence', (data: { presence: User['presence'] }) => {
         const { presence } = data;
         // Update user's presence in the database or in-memory store
-        updateUserPresence(user._id as string, presence);
+        updateUserPresence(user.id.toString(), presence);
 
         // Notify other users about the presence change
         socket.broadcast.emit('userPresenceChanged', {
-          userId: user._id,
+          userId: user.id.toString(),
           presence,
         });
       });
 
       // Handle disconnect
       socket.on('disconnect', () => {
-        console.log(`User disconnected: ${user.username} (${socket.id})`);
+        console.log(`User disconnected: ${user.email} (${socket.id})`);
         // Update user's presence to offline
-        updateUserPresence(user._id as string, 'offline');
+        updateUserPresence(user.id.toString(), 'offline');
 
         // Notify other users
         socket.broadcast.emit('userPresenceChanged', {
-          userId: user._id,
+          userId: user.id.toString(),
           presence: 'offline',
         });
       });

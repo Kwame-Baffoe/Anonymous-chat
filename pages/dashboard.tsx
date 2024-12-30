@@ -279,11 +279,9 @@ const DashboardContent: React.FC = () => {
 const DashboardPage: React.FC = () => {
   return (
     <ProtectedRoute>
-      <SocketProvider>
-        <ChatProvider>
-          <DashboardContent />
-        </ChatProvider>
-      </SocketProvider>
+      <ChatProvider>
+        <DashboardContent />
+      </ChatProvider>
     </ProtectedRoute>
   );
 };
