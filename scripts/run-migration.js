@@ -1,22 +1,15 @@
-const dotenv = require('dotenv');
-const { query } = require('../lib/postgresql');
-const fs = require('fs');
-const path = require('path');
+import { query } from '../lib/postgresql.js';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-// Load environment variables from .env.local
-const result = dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
-if (result.error) {
-  throw new Error('Failed to load .env.local file');
-}
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 async function runMigration() {
   try {
-    const migrationFile = process.argv[2];
-    if (!migrationFile) {
-      throw new Error('Please provide a migration file name as an argument');
-    }
-    console.log('Running migration:', migrationFile);
-    const migrationPath = path.join(__dirname, '..', migrationFile);
+    console.log('Running migration: add_presence_column.sql');
+    const migrationPath = path.join(process.cwd(), 'lib', 'migrations', 'add_presence_column.sql');
     const sql = fs.readFileSync(migrationPath, 'utf8');
     
     await query(sql);

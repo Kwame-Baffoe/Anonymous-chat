@@ -56,7 +56,7 @@ const validateMessage = (message: string): void => {
   }
 };
 
-export const CryptoService = {
+const CryptoService = {
   async generateKeyPair(): Promise<{ publicKey: string; privateKey: string }> {
     try {
       // Generate ECDH key pair using Node's crypto module

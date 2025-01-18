@@ -1,4 +1,5 @@
 {
+  "type": "module",
   "dependencies": {
     "@emoji-mart/data": "^1.2.1",
     "@tanstack/react-query": "^5.62.11",

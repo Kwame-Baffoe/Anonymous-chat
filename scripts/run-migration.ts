@@ -4,8 +4,8 @@ import path from 'path';
 
 async function runMigration() {
   try {
-    console.log('Running migration: add_message_features.sql');
-    const migrationPath = path.join(process.cwd(), 'lib', 'migrations', 'add_message_features.sql');
+    console.log('Running migration: add_presence_column.sql');
+    const migrationPath = path.join(process.cwd(), 'lib', 'migrations', 'add_presence_column.sql');
     const sql = fs.readFileSync(migrationPath, 'utf8');
     
     await query(sql);
